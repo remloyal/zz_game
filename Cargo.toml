@@ -1,0 +1,10 @@
+[package]
+name = "zz_game"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+[dependencies]
+bevy = "0.18.0"
