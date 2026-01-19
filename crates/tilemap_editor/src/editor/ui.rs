@@ -308,6 +308,7 @@ fn spawn_ui_root(commands: &mut Commands) {
 			Node {
 				width: Val::Percent(100.0),
 				height: Val::Auto,
+				overflow: Overflow::visible(),
 				flex_direction: FlexDirection::Row,
 				align_items: AlignItems::Center,
 				column_gap: Val::Px(8.0),
@@ -315,28 +316,12 @@ fn spawn_ui_root(commands: &mut Commands) {
 				..default()
 			},
 			BackgroundColor(UI_PANEL),
+			ZIndex(1000),
 			TilesetBar,
 		))
 		.id();
 
 	commands.entity(tileset_bar).with_children(|p| {
-		p.spawn((
-			Text::new("Tileset:"),
-			TextFont {
-				font_size: 13.0,
-				..default()
-			},
-			TextColor(Color::WHITE),
-		));
-		p.spawn((
-			Text::new("(未选择)"),
-			TextFont {
-				font_size: 13.0,
-				..default()
-			},
-			TextColor(Color::WHITE),
-			TilesetActiveLabel,
-		));
 		p.spawn((
 			Text::new("分类:"),
 			TextFont {
@@ -368,7 +353,7 @@ fn spawn_ui_root(commands: &mut Commands) {
 		))
 		.with_children(|p| {
 			p.spawn((
-				Text::new("切换"),
+				Text::new("分类"),
 				TextFont {
 					font_size: 13.0,
 					..default()
@@ -390,7 +375,7 @@ fn spawn_ui_root(commands: &mut Commands) {
 		))
 		.with_children(|p| {
 			p.spawn((
-				Text::new("切换"),
+				Text::new("选择"),
 				TextFont {
 					font_size: 13.0,
 					..default()
@@ -404,13 +389,18 @@ fn spawn_ui_root(commands: &mut Commands) {
 		.spawn((
 			Node {
 				width: Val::Percent(100.0),
-				height: Val::Auto,
+				max_height: Val::Px(360.0),
+				overflow: Overflow::scroll_y(),
+				position_type: PositionType::Absolute,
+				top: Val::Px(32.0),
+				left: Val::Px(0.0),
 				flex_direction: FlexDirection::Column,
 				row_gap: Val::Px(6.0),
 				padding: UiRect::all(Val::Px(8.0)),
 				..default()
 			},
 			BackgroundColor(UI_PANEL),
+			ZIndex(2000),
 			Visibility::Hidden,
 			TilesetMenuRoot,
 		))
@@ -624,9 +614,9 @@ fn spawn_ui_root(commands: &mut Commands) {
 	});
 
 	commands.entity(palette_scroll).add_child(palette_root);
+	commands.entity(tileset_bar).add_child(tileset_menu);
 	commands.entity(left_panel).add_child(toolbar);
 	commands.entity(left_panel).add_child(tileset_bar);
-	commands.entity(left_panel).add_child(tileset_menu);
 	commands.entity(left_panel).add_child(palette_scroll);
 	commands.entity(root).add_child(left_panel);
 	commands.entity(root).add_child(right_panel);
@@ -1456,41 +1446,24 @@ pub fn update_hud_text(
 		return;
 	};
 
-	let (tileset_label, tile_count) = match lib.active_id.as_ref() {
-		Some(id) => {
-			let label = lib
-				.entries
-				.iter()
-				.find(|e| &e.id == id)
-				.map(|e| {
-					if !e.name.trim().is_empty() {
-						e.name.clone()
-					} else {
-						e.asset_path.clone()
-					}
-				})
-				.unwrap_or_else(|| id.clone());
-			let count = runtime
-				.by_id
-				.get(id)
-				.map(|r| r.columns.saturating_mul(r.rows))
-				.unwrap_or(0);
-			(label, count)
-		}
-		None => ("(未选择)".to_string(), 0),
-	};
+	let tile_count = lib
+		.active_id
+		.as_ref()
+		.and_then(|id| runtime.by_id.get(id).map(|r| r.columns.saturating_mul(r.rows)))
+		.unwrap_or(0);
 
 	let msg = if tile_count == 0 {
-		"Tileset: (未选择)\n按 O 选择 tileset，或点左上角【打开】".to_string()
+		"未选择 tileset：按 O 或点左上角【打开】导入".to_string()
 	} else {
 		format!(
-			"Tileset: '{}' | tile={}x{} | tiles={}\nSelected tile: {}（点左侧 tile 或用 [ / ]）\n右侧画布：左键绘制 / 右键擦除 | R 清空\n缩放：鼠标滚轮（在右侧）\n保存/读取: S / L | 导入/导出：按钮\nmap: {}",
-			tileset_label,
+			"选中 tile: {}\n地图: {} ({}x{})\n图块: {}x{} | tiles: {}",
+			state.selected_tile,
+			config.save_path,
+			config.map_size.x,
+			config.map_size.y,
 			config.tile_size.x,
 			config.tile_size.y,
-			tile_count,
-			state.selected_tile,
-			config.save_path
+			tile_count
 		)
 	};
 
