@@ -24,7 +24,7 @@ use tileset::{
 };
 use types::{
     EditorConfig, EditorState, MapSizeInput, PanState, TilesetLibrary, TilesetLoading, TilesetRuntime,
-    UiState,
+    Clipboard, SelectionState, ShiftMapSettings, ToolState, UiState, UndoStack,
 };
 use ui::{
     action_button_click, apply_custom_map_size, build_palette_when_ready, map_size_text_input,
@@ -32,13 +32,17 @@ use ui::{
     apply_ui_font_to_all_text, load_ui_font, rebuild_tileset_menu_when_needed,
     sync_map_size_input_from_config, tileset_menu_item_click,
     tileset_category_cycle_click, tileset_menu_visibility, tileset_toggle_button_click,
+    shift_mode_button_click, sync_tool_button_styles, tool_button_click, update_shift_mode_label,
     update_hud_text, update_map_size_field_text, update_tileset_active_label,
     update_tileset_category_label,
 };
 use world::{
     camera_pan, camera_zoom, draw_canvas_helpers, keyboard_shortcuts, paint_with_mouse,
     recenter_camera_on_map_change, refresh_map_on_tileset_runtime_change, save_load_shortcuts,
-    setup_world,
+    copy_paste_shortcuts, fill_with_mouse, paste_with_mouse, rect_with_mouse, select_with_mouse,
+    eyedropper_hold_shortcut, eyedropper_with_mouse, move_selection_shortcuts, setup_world,
+	selection_cut_delete_shortcuts, shift_map_shortcuts, tool_shortcuts, undo_redo_shortcuts,
+    selection_selectall_cancel_shortcuts,
 };
 
 /// UI 相关常量
@@ -85,6 +89,11 @@ pub fn run() {
         .init_resource::<PanState>()
         .init_resource::<MapSizeInput>()
         .init_resource::<UiState>()
+        .init_resource::<ToolState>()
+        .init_resource::<Clipboard>()
+		.init_resource::<SelectionState>()
+		.init_resource::<ShiftMapSettings>()
+        .init_resource::<UndoStack>()
         .add_systems(
             Startup,
             (
@@ -111,6 +120,10 @@ pub fn run() {
                 build_palette_when_ready,
                 palette_tile_click,
                 palette_scroll_wheel,
+                tool_button_click,
+                sync_tool_button_styles,
+				shift_mode_button_click,
+				update_shift_mode_label,
             )
                 .chain(),
         )
@@ -123,14 +136,37 @@ pub fn run() {
                 sync_map_size_input_from_config,
                 update_map_size_field_text,
                 action_button_click,
+            ),
+        )
+        .add_systems(
+            Update,
+            (
                 keyboard_shortcuts,
+                tool_shortcuts,
+                eyedropper_hold_shortcut,
+                copy_paste_shortcuts,
+                shift_map_shortcuts,
+                move_selection_shortcuts,
+                selection_cut_delete_shortcuts,
+                selection_selectall_cancel_shortcuts,
+                undo_redo_shortcuts,
                 save_load_shortcuts,
+            ),
+        )
+        .add_systems(
+            Update,
+            (
                 refresh_map_on_tileset_runtime_change,
                 recenter_camera_on_map_change,
                 camera_zoom,
                 camera_pan,
                 draw_canvas_helpers,
+                eyedropper_with_mouse,
                 paint_with_mouse,
+				rect_with_mouse,
+				fill_with_mouse,
+				select_with_mouse,
+				paste_with_mouse,
                 update_hud_text,
             ),
         )

@@ -254,3 +254,120 @@ pub struct PanState {
     pub active: bool,
     pub last_world: Option<Vec2>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolKind {
+    Pencil,
+    Rect,
+    Fill,
+    Select,
+    Paste,
+	Eyedropper,
+}
+
+impl Default for ToolKind {
+    fn default() -> Self {
+        Self::Pencil
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct ToolState {
+    pub tool: ToolKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShiftMapMode {
+    Blank,
+    Wrap,
+}
+
+impl Default for ShiftMapMode {
+    fn default() -> Self {
+        Self::Blank
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct ShiftMapSettings {
+    pub mode: ShiftMapMode,
+}
+
+#[derive(Resource, Default, Clone)]
+pub struct Clipboard {
+    pub width: u32,
+    pub height: u32,
+    pub tiles: Vec<Option<TileRef>>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SelectionRect {
+    pub min: UVec2,
+    pub max: UVec2,
+}
+
+impl SelectionRect {
+    pub fn width(&self) -> u32 {
+        self.max.x.saturating_sub(self.min.x) + 1
+    }
+
+    pub fn height(&self) -> u32 {
+        self.max.y.saturating_sub(self.min.y) + 1
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct SelectionState {
+    pub dragging: bool,
+    pub start: UVec2,
+    pub current: UVec2,
+    pub rect: Option<SelectionRect>,
+}
+
+#[derive(Component, Clone, Copy)]
+pub struct ToolButton(pub ToolKind);
+
+#[derive(Component)]
+pub struct ShiftModeButton;
+
+#[derive(Component)]
+pub struct ShiftModeLabel;
+
+#[derive(Clone, Debug)]
+pub struct CellChange {
+    pub idx: usize,
+    pub before: Option<TileRef>,
+    pub after: Option<TileRef>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct EditCommand {
+    pub changes: Vec<CellChange>,
+}
+
+#[derive(Resource, Default)]
+pub struct UndoStack {
+    pub undo: Vec<EditCommand>,
+    pub redo: Vec<EditCommand>,
+    pub max_len: usize,
+}
+
+impl UndoStack {
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    pub fn push(&mut self, cmd: EditCommand) {
+        if cmd.changes.is_empty() {
+            return;
+        }
+        self.redo.clear();
+        self.undo.push(cmd);
+        let max_len = if self.max_len == 0 { 200 } else { self.max_len };
+        if self.undo.len() > max_len {
+            let drain = self.undo.len() - max_len;
+            self.undo.drain(0..drain);
+        }
+    }
+}

@@ -9,14 +9,127 @@ use bevy::prelude::*;
 use bevy::input::mouse::MouseWheel;
 use bevy::window::PrimaryWindow;
 use bevy::ecs::message::MessageReader;
+use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use super::persistence::{load_map_from_file, save_map_to_file};
 use super::tileset::{merge_tilesets_from_map, rect_for_tile_index, save_tileset_library};
 use super::types::{
-    EditorConfig, EditorState, PanState, TileEntities, TileMapData, TileRef, TilesetLibrary,
-    TilesetLoading, TilesetRuntime, WorldCamera,
+    CellChange, EditCommand, EditorConfig, EditorState, PanState, TileEntities, TileMapData, TileRef,
+    Clipboard, MapSizeFocus, MapSizeInput, SelectionRect, SelectionState, ShiftMapMode,
+    ShiftMapSettings, TilesetLibrary, TilesetLoading, TilesetRuntime, ToolKind, ToolState, UndoStack,
+    WorldCamera,
 };
 use super::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX};
+
+fn cursor_tile_pos(
+    window: &Window,
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+    config: &EditorConfig,
+    map_w: u32,
+    map_h: u32,
+) -> Option<UVec2> {
+    let cursor_pos = window.cursor_position()?;
+
+    // 左侧 UI 面板区域不响应
+    if cursor_pos.x <= LEFT_PANEL_WIDTH_PX {
+        return None;
+    }
+    // 右侧顶部 UI 工具条区域不响应
+    if cursor_pos.y <= RIGHT_TOPBAR_HEIGHT_PX {
+        return None;
+    }
+
+    let world_pos = camera
+        .viewport_to_world_2d(camera_transform, cursor_pos)
+        .ok()?;
+
+    let tile_w = config.tile_size.x as f32;
+    let tile_h = config.tile_size.y as f32;
+    if tile_w <= 0.0 || tile_h <= 0.0 {
+        return None;
+    }
+
+    let x = (world_pos.x / tile_w).floor() as i32;
+    let y = (world_pos.y / tile_h).floor() as i32;
+    if x < 0 || y < 0 {
+        return None;
+    }
+    let (x, y) = (x as u32, y as u32);
+    if x >= map_w || y >= map_h {
+        return None;
+    }
+
+    Some(UVec2::new(x, y))
+}
+
+fn rect_from_two(a: UVec2, b: UVec2) -> SelectionRect {
+    let min_x = a.x.min(b.x);
+    let min_y = a.y.min(b.y);
+    let max_x = a.x.max(b.x);
+    let max_y = a.y.max(b.y);
+    SelectionRect {
+        min: UVec2::new(min_x, min_y),
+        max: UVec2::new(max_x, max_y),
+    }
+}
+
+pub fn undo_redo_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut undo: ResMut<UndoStack>,
+    runtime: Res<TilesetRuntime>,
+    config: Res<EditorConfig>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+) {
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    if !ctrl {
+        return;
+    }
+
+    let Some(mut map) = map else {
+        return;
+    };
+    let Some(tile_entities) = tile_entities else {
+        return;
+    };
+
+    let want_undo = keys.just_pressed(KeyCode::KeyZ)
+        && !(keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight));
+    let want_redo = keys.just_pressed(KeyCode::KeyY)
+        || (keys.just_pressed(KeyCode::KeyZ)
+            && (keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight)));
+
+    if want_undo {
+        let Some(cmd) = undo.undo.pop() else {
+            return;
+        };
+        for ch in &cmd.changes {
+            if ch.idx < map.tiles.len() {
+                map.tiles[ch.idx] = ch.before.clone();
+            }
+        }
+        undo.redo.push(cmd);
+        apply_map_to_entities(&runtime, &map, &tile_entities, &mut tiles_q, &config);
+        return;
+    }
+
+    if want_redo {
+        let Some(cmd) = undo.redo.pop() else {
+            return;
+        };
+        for ch in &cmd.changes {
+            if ch.idx < map.tiles.len() {
+                map.tiles[ch.idx] = ch.after.clone();
+            }
+        }
+        undo.undo.push(cmd);
+        apply_map_to_entities(&runtime, &map, &tile_entities, &mut tiles_q, &config);
+        return;
+    }
+}
 
 /// 当地图尺寸变化时，把相机移动到地图中心（避免切换尺寸后内容在屏幕外）。
 pub fn recenter_camera_on_map_change(
@@ -119,6 +232,9 @@ pub fn draw_canvas_helpers(
     camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
     config: Res<EditorConfig>,
     tile_entities: Option<Res<TileEntities>>,
+	tools: Res<ToolState>,
+	selection: Res<SelectionState>,
+	clipboard: Res<Clipboard>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -174,6 +290,19 @@ pub fn draw_canvas_helpers(
         border_color,
     );
 
+    // 选择框：不要求鼠标在画布内，避免“按了快捷键但光标在 UI 上看不到”。
+    if let Some(rect) = selection.rect {
+        let sx0 = rect.min.x as f32 * tile_w;
+        let sy0 = rect.min.y as f32 * tile_h;
+        let sx1 = (rect.max.x as f32 + 1.0) * tile_w;
+        let sy1 = (rect.max.y as f32 + 1.0) * tile_h;
+        let c = Color::srgba(1.0, 1.0, 0.0, 0.85);
+        gizmos.line_2d(Vec2::new(sx0, sy0), Vec2::new(sx1, sy0), c);
+        gizmos.line_2d(Vec2::new(sx1, sy0), Vec2::new(sx1, sy1), c);
+        gizmos.line_2d(Vec2::new(sx1, sy1), Vec2::new(sx0, sy1), c);
+        gizmos.line_2d(Vec2::new(sx0, sy1), Vec2::new(sx0, sy0), c);
+    }
+
     // hover 格子高亮（仅在鼠标在右侧画布区域时）
     let Some(cursor_pos) = window.cursor_position() else {
         return;
@@ -181,7 +310,6 @@ pub fn draw_canvas_helpers(
     if cursor_pos.x <= LEFT_PANEL_WIDTH_PX {
         return;
     }
-
     if cursor_pos.y <= RIGHT_TOPBAR_HEIGHT_PX {
         return;
     }
@@ -209,6 +337,34 @@ pub fn draw_canvas_helpers(
     gizmos.line_2d(Vec2::new(x1, y0), Vec2::new(x1, y1), hover_color);
     gizmos.line_2d(Vec2::new(x1, y1), Vec2::new(x0, y1), hover_color);
     gizmos.line_2d(Vec2::new(x0, y1), Vec2::new(x0, y0), hover_color);
+
+    // 粘贴预览（Paste 工具）：以鼠标所在格子为左上角
+    if tools.tool == ToolKind::Paste && clipboard.width > 0 && clipboard.height > 0 {
+        let Some(cursor_pos) = window.cursor_position() else {
+            return;
+        };
+        if cursor_pos.x <= LEFT_PANEL_WIDTH_PX || cursor_pos.y <= RIGHT_TOPBAR_HEIGHT_PX {
+            return;
+        }
+        let Ok(world_pos) = camera.viewport_to_world_2d(camera_transform, cursor_pos) else {
+            return;
+        };
+        let px = (world_pos.x / tile_w).floor() as i32;
+        let py = (world_pos.y / tile_h).floor() as i32;
+        if px < 0 || py < 0 {
+            return;
+        }
+        let (px, py) = (px as u32, py as u32);
+        let x1 = (px as f32 + clipboard.width as f32) * tile_w;
+        let y1 = (py as f32 + clipboard.height as f32) * tile_h;
+        let x0 = px as f32 * tile_w;
+        let y0 = py as f32 * tile_h;
+        let c = Color::srgba(0.2, 1.0, 0.2, 0.75);
+        gizmos.line_2d(Vec2::new(x0, y0), Vec2::new(x1, y0), c);
+        gizmos.line_2d(Vec2::new(x1, y0), Vec2::new(x1, y1), c);
+        gizmos.line_2d(Vec2::new(x1, y1), Vec2::new(x0, y1), c);
+        gizmos.line_2d(Vec2::new(x0, y1), Vec2::new(x0, y0), c);
+    }
 }
 
 /// 世界相机缩放（右侧区域鼠标滚轮）。
@@ -273,6 +429,7 @@ pub fn keyboard_shortcuts(
     lib: Res<TilesetLibrary>,
     runtime: Res<TilesetRuntime>,
     mut state: ResMut<EditorState>,
+    mut undo: ResMut<UndoStack>,
     tile_entities: Option<Res<TileEntities>>,
     mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
     map: Option<ResMut<TileMapData>>,
@@ -293,13 +450,738 @@ pub fn keyboard_shortcuts(
         state.selected_tile = (state.selected_tile + 1).min(tile_count - 1);
     }
 
-    // 立即同步渲染，避免“数据清了但画面没变”。
+    // 清空地图（做成可 Undo 的命令）。
     if keys.just_pressed(KeyCode::KeyR) {
         if let (Some(tile_entities), Some(mut map)) = (tile_entities.as_deref(), map) {
-            *map = TileMapData::new(map.width, map.height);
+            let mut changes: Vec<CellChange> = Vec::new();
+            for (idx, cell) in map.tiles.iter_mut().enumerate() {
+                let before = cell.clone();
+                if before.is_some() {
+                    *cell = None;
+                    changes.push(CellChange {
+                        idx,
+                        before,
+                        after: None,
+                    });
+                }
+            }
+            undo.push(EditCommand { changes });
             apply_map_to_entities(&runtime, &map, tile_entities, &mut tiles_q, &config);
         }
     }
+}
+
+/// 工具快捷键：1/2/3/4 切换（笔刷/矩形/填充/选择）。
+pub fn tool_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<MapSizeInput>,
+    mut tools: ResMut<ToolState>,
+) {
+    // 正在输入地图尺寸时，数字键留给输入框。
+    if input.focus != MapSizeFocus::None {
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::Digit1) || keys.just_pressed(KeyCode::Numpad1) {
+        tools.tool = ToolKind::Pencil;
+    } else if keys.just_pressed(KeyCode::Digit2) || keys.just_pressed(KeyCode::Numpad2) {
+        tools.tool = ToolKind::Rect;
+    } else if keys.just_pressed(KeyCode::Digit3) || keys.just_pressed(KeyCode::Numpad3) {
+        tools.tool = ToolKind::Fill;
+    } else if keys.just_pressed(KeyCode::Digit4) || keys.just_pressed(KeyCode::Numpad4) {
+        tools.tool = ToolKind::Select;
+    } else if keys.just_pressed(KeyCode::Digit5) || keys.just_pressed(KeyCode::Numpad5) {
+        tools.tool = ToolKind::Paste;
+    }
+}
+
+/// 按住 I 临时切换为吸管（松开恢复到原工具）。
+pub fn eyedropper_hold_shortcut(
+    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<MapSizeInput>,
+    mut tools: ResMut<ToolState>,
+    mut prev: Local<Option<ToolKind>>,
+) {
+    if input.focus != MapSizeFocus::None {
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::KeyI) {
+        if *prev == None {
+            *prev = Some(tools.tool);
+        }
+        tools.tool = ToolKind::Eyedropper;
+    }
+
+    if keys.just_released(KeyCode::KeyI) {
+        if let Some(back) = prev.take() {
+            // 若用户手动点了吸管按钮，就不要强制切回
+            if tools.tool == ToolKind::Eyedropper {
+                tools.tool = back;
+            }
+        }
+    }
+}
+
+/// 吸管工具：点击格子后把该格子的 tile 设为当前选择。
+pub fn eyedropper_with_mouse(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    tools: Res<ToolState>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    config: Res<EditorConfig>,
+    map: Option<Res<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut state: ResMut<EditorState>,
+    mut lib: ResMut<TilesetLibrary>,
+) {
+    if tools.tool != ToolKind::Eyedropper {
+        return;
+    }
+    if keys.pressed(KeyCode::Space) {
+        return;
+    }
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    let Some(map) = map else {
+        return;
+    };
+    let Some(tile_entities) = tile_entities else {
+        return;
+    };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok((camera, camera_transform)) = camera_q.single() else {
+        return;
+    };
+    let Some(pos) = cursor_tile_pos(
+        window,
+        camera,
+        camera_transform,
+        &config,
+        tile_entities.width,
+        tile_entities.height,
+    ) else {
+        return;
+    };
+
+    let idx = map.idx(pos.x, pos.y);
+    let Some(tile) = map.tiles.get(idx).cloned().flatten() else {
+        return;
+    };
+
+    state.selected_tile = tile.index;
+    lib.active_id = Some(tile.tileset_id.clone());
+    if let Some(entry) = lib.entries.iter().find(|e| e.id == tile.tileset_id) {
+        let cat = entry.category.trim();
+        if !cat.is_empty() {
+            lib.active_category = cat.to_string();
+        }
+    }
+}
+
+/// Shift Map：Ctrl + 方向键整体平移一格（空出来的格子填 None），并可撤销。
+pub fn shift_map_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<MapSizeInput>,
+    settings: Res<ShiftMapSettings>,
+    runtime: Res<TilesetRuntime>,
+    config: Res<EditorConfig>,
+    mut undo: ResMut<UndoStack>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+) {
+    // 输入框聚焦时不抢快捷键
+    if input.focus != MapSizeFocus::None {
+        return;
+    }
+
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    if !ctrl {
+        return;
+    }
+
+    let mut dx: i32 = 0;
+    let mut dy: i32 = 0;
+    if keys.just_pressed(KeyCode::ArrowLeft) {
+        dx = -1;
+    } else if keys.just_pressed(KeyCode::ArrowRight) {
+        dx = 1;
+    } else if keys.just_pressed(KeyCode::ArrowUp) {
+        dy = 1;
+    } else if keys.just_pressed(KeyCode::ArrowDown) {
+        dy = -1;
+    } else {
+        return;
+    }
+
+    let Some(mut map) = map else {
+        return;
+    };
+    let Some(tile_entities) = tile_entities else {
+        return;
+    };
+
+    let w = map.width;
+    let h = map.height;
+    if w == 0 || h == 0 {
+        return;
+    }
+
+    let mut new_tiles = vec![None; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let (dst_x, dst_y) = match settings.mode {
+                ShiftMapMode::Blank => {
+                    let nx = x as i32 + dx;
+                    let ny = y as i32 + dy;
+                    if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
+                        continue;
+                    }
+                    (nx as u32, ny as u32)
+                }
+                ShiftMapMode::Wrap => {
+                    let nx = (x as i32 + dx).rem_euclid(w as i32) as u32;
+                    let ny = (y as i32 + dy).rem_euclid(h as i32) as u32;
+                    (nx, ny)
+                }
+            };
+
+            let src = map.idx(x, y);
+            let dst = map.idx(dst_x, dst_y);
+            new_tiles[dst] = map.tiles[src].clone();
+        }
+    }
+
+    let mut cmd = EditCommand::default();
+    for i in 0..map.tiles.len() {
+        let before = map.tiles[i].clone();
+        let after = new_tiles[i].clone();
+        if before != after {
+            cmd.changes.push(CellChange { idx: i, before, after });
+        }
+    }
+
+    if cmd.changes.is_empty() {
+        return;
+    }
+
+    map.tiles = new_tiles;
+    undo.push(cmd);
+    apply_map_to_entities(&runtime, &map, &tile_entities, &mut tiles_q, &config);
+}
+
+/// 选择区移动：在 Select 工具下按 Alt + 方向键，把选择框内内容整体移动 1 格（可撤销）。
+pub fn move_selection_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<MapSizeInput>,
+    tools: Res<ToolState>,
+    runtime: Res<TilesetRuntime>,
+    config: Res<EditorConfig>,
+    mut undo: ResMut<UndoStack>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut selection: ResMut<SelectionState>,
+) {
+    if input.focus != MapSizeFocus::None {
+        return;
+    }
+    if tools.tool != ToolKind::Select {
+        return;
+    }
+    let Some(rect) = selection.rect else {
+        return;
+    };
+
+    let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+    if !alt {
+        return;
+    }
+
+    let mut dx: i32 = 0;
+    let mut dy: i32 = 0;
+    if keys.just_pressed(KeyCode::ArrowLeft) {
+        dx = -1;
+    } else if keys.just_pressed(KeyCode::ArrowRight) {
+        dx = 1;
+    } else if keys.just_pressed(KeyCode::ArrowUp) {
+        dy = 1;
+    } else if keys.just_pressed(KeyCode::ArrowDown) {
+        dy = -1;
+    } else {
+        return;
+    }
+
+    let Some(mut map) = map else {
+        return;
+    };
+    let Some(tile_entities) = tile_entities else {
+        return;
+    };
+
+    // 不允许越界移动，避免裁剪导致“选区变形”。
+    let new_min_x = rect.min.x as i32 + dx;
+    let new_min_y = rect.min.y as i32 + dy;
+    let new_max_x = rect.max.x as i32 + dx;
+    let new_max_y = rect.max.y as i32 + dy;
+    if new_min_x < 0
+        || new_min_y < 0
+        || new_max_x >= map.width as i32
+        || new_max_y >= map.height as i32
+    {
+        return;
+    }
+
+    let new_rect = SelectionRect {
+        min: UVec2::new(new_min_x as u32, new_min_y as u32),
+        max: UVec2::new(new_max_x as u32, new_max_y as u32),
+    };
+
+    // 先备份原内容
+    let w = rect.width();
+    let h = rect.height();
+    let mut buf: Vec<Option<TileRef>> = Vec::with_capacity((w * h) as usize);
+    for y in rect.min.y..=rect.max.y {
+        for x in rect.min.x..=rect.max.x {
+            buf.push(map.tiles[map.idx(x, y)].clone());
+        }
+    }
+
+    let mut cmd = EditCommand::default();
+
+    // 清空原区域
+    for y in rect.min.y..=rect.max.y {
+        for x in rect.min.x..=rect.max.x {
+            let idx = map.idx(x, y);
+            if map.tiles[idx].is_some() {
+                let before = map.tiles[idx].clone();
+                map.tiles[idx] = None;
+                cmd.changes.push(CellChange {
+                    idx,
+                    before,
+                    after: None,
+                });
+            }
+        }
+    }
+
+    // 写入新区域
+    for cy in 0..h {
+        for cx in 0..w {
+            let dst_x = new_rect.min.x + cx;
+            let dst_y = new_rect.min.y + cy;
+            let after = buf[(cy * w + cx) as usize].clone();
+            let idx = map.idx(dst_x, dst_y);
+            if map.tiles[idx] == after {
+                continue;
+            }
+            let before = map.tiles[idx].clone();
+            map.tiles[idx] = after.clone();
+            cmd.changes.push(CellChange { idx, before, after });
+        }
+    }
+
+    if cmd.changes.is_empty() {
+        return;
+    }
+
+    // 局部刷新渲染
+    for ch in &cmd.changes {
+        let entity = tile_entities.entities[ch.idx];
+        if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
+            match &ch.after {
+                Some(TileRef { tileset_id, index }) => {
+                    let Some(atlas) = runtime.by_id.get(tileset_id) else {
+                        sprite.rect = None;
+                        *vis = Visibility::Hidden;
+                        continue;
+                    };
+                    sprite.image = atlas.texture.clone();
+                    sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
+                    *vis = Visibility::Visible;
+                }
+                None => {
+                    *vis = Visibility::Hidden;
+                }
+            }
+        }
+    }
+
+    undo.push(cmd);
+    selection.rect = Some(new_rect);
+    selection.start = new_rect.min;
+    selection.current = new_rect.max;
+}
+
+/// 选择工具：拖拽框选矩形。
+pub fn select_with_mouse(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    tools: Res<ToolState>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    config: Res<EditorConfig>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut selection: ResMut<SelectionState>,
+) {
+    if tools.tool != ToolKind::Select {
+        return;
+    }
+    if keys.pressed(KeyCode::Space) {
+        return;
+    }
+    let Some(tile_entities) = tile_entities else {
+        return;
+    };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok((camera, camera_transform)) = camera_q.single() else {
+        return;
+    };
+
+    let left_start = buttons.just_pressed(MouseButton::Left);
+    let left_down = buttons.pressed(MouseButton::Left);
+    let left_end = buttons.just_released(MouseButton::Left);
+
+    let pos = cursor_tile_pos(
+        window,
+        camera,
+        camera_transform,
+        &config,
+        tile_entities.width,
+        tile_entities.height,
+    );
+
+    if !selection.dragging {
+        if left_start {
+            let Some(pos) = pos else {
+                return;
+            };
+            selection.dragging = true;
+            selection.start = pos;
+            selection.current = pos;
+            selection.rect = Some(rect_from_two(pos, pos));
+        }
+        return;
+    }
+
+    if selection.dragging {
+        if let Some(pos) = pos {
+            if left_down {
+                selection.current = pos;
+                selection.rect = Some(rect_from_two(selection.start, selection.current));
+            }
+        }
+        if left_end || !left_down {
+            selection.dragging = false;
+            selection.rect = Some(rect_from_two(selection.start, selection.current));
+        }
+    }
+}
+
+/// Ctrl+C 复制选择区域到 Clipboard；Ctrl+V 进入粘贴模式；Esc 退出粘贴。
+pub fn copy_paste_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<MapSizeInput>,
+    mut tools: ResMut<ToolState>,
+    selection: Res<SelectionState>,
+    map: Option<Res<TileMapData>>,
+    mut clipboard: ResMut<Clipboard>,
+) {
+    // 输入框聚焦时不抢快捷键
+    if input.focus != MapSizeFocus::None {
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::Escape) {
+        if tools.tool == ToolKind::Paste {
+            tools.tool = ToolKind::Select;
+        }
+        return;
+    }
+
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    if !ctrl {
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::KeyC) {
+        let Some(map) = map else {
+            return;
+        };
+        let Some(rect) = selection.rect else {
+            return;
+        };
+        let w = rect.width();
+        let h = rect.height();
+        let mut tiles = Vec::with_capacity((w * h) as usize);
+        for y in rect.min.y..=rect.max.y {
+            for x in rect.min.x..=rect.max.x {
+                let idx = map.idx(x, y);
+                tiles.push(map.tiles[idx].clone());
+            }
+        }
+        clipboard.width = w;
+        clipboard.height = h;
+        clipboard.tiles = tiles;
+    }
+
+    if keys.just_pressed(KeyCode::KeyV) {
+        if clipboard.width == 0 || clipboard.height == 0 || clipboard.tiles.is_empty() {
+            return;
+        }
+        tools.tool = ToolKind::Paste;
+    }
+}
+
+/// 选择编辑：Ctrl+X 剪切（复制到剪贴板并清空选区），Delete/Backspace 清空选区。
+pub fn selection_cut_delete_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<MapSizeInput>,
+    tools: Res<ToolState>,
+    runtime: Res<TilesetRuntime>,
+    config: Res<EditorConfig>,
+    selection: Res<SelectionState>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut clipboard: ResMut<Clipboard>,
+    mut undo: ResMut<UndoStack>,
+) {
+    if input.focus != MapSizeFocus::None {
+        return;
+    }
+    if tools.tool != ToolKind::Select {
+        return;
+    }
+    let Some(rect) = selection.rect else {
+        return;
+    };
+
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    let want_cut = ctrl && keys.just_pressed(KeyCode::KeyX);
+    let want_clear = keys.just_pressed(KeyCode::Delete) || keys.just_pressed(KeyCode::Backspace);
+    if !(want_cut || want_clear) {
+        return;
+    }
+
+    let Some(mut map) = map else {
+        return;
+    };
+    let Some(tile_entities) = tile_entities else {
+        return;
+    };
+
+    if want_cut {
+        let w = rect.width();
+        let h = rect.height();
+        let mut tiles = Vec::with_capacity((w * h) as usize);
+        for y in rect.min.y..=rect.max.y {
+            for x in rect.min.x..=rect.max.x {
+                let idx = map.idx(x, y);
+                tiles.push(map.tiles[idx].clone());
+            }
+        }
+        clipboard.width = w;
+        clipboard.height = h;
+        clipboard.tiles = tiles;
+    }
+
+    let mut cmd = EditCommand::default();
+    for y in rect.min.y..=rect.max.y {
+        for x in rect.min.x..=rect.max.x {
+            let idx = map.idx(x, y);
+            if map.tiles[idx].is_none() {
+                continue;
+            }
+            let before = map.tiles[idx].clone();
+            map.tiles[idx] = None;
+            cmd.changes.push(CellChange {
+                idx,
+                before,
+                after: None,
+            });
+        }
+    }
+
+    if cmd.changes.is_empty() {
+        return;
+    }
+
+    for ch in &cmd.changes {
+        let entity = tile_entities.entities[ch.idx];
+        if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
+            match &ch.after {
+                Some(TileRef { tileset_id, index }) => {
+                    let Some(atlas) = runtime.by_id.get(tileset_id) else {
+                        sprite.rect = None;
+                        *vis = Visibility::Hidden;
+                        continue;
+                    };
+                    sprite.image = atlas.texture.clone();
+                    sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
+                    *vis = Visibility::Visible;
+                }
+                None => {
+                    *vis = Visibility::Hidden;
+                }
+            }
+        }
+    }
+
+    undo.push(cmd);
+}
+
+/// 选择辅助：Ctrl+A 全选，Ctrl+D 取消选择。
+pub fn selection_selectall_cancel_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<MapSizeInput>,
+    mut tools: ResMut<ToolState>,
+    map: Option<Res<TileMapData>>,
+    mut selection: ResMut<SelectionState>,
+) {
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    if !ctrl {
+        return;
+    }
+
+    // 允许 Ctrl+A / Ctrl+D 在地图尺寸输入框聚焦时依然生效。
+    let _ = input;
+
+    if keys.just_pressed(KeyCode::KeyD) {
+        if tools.tool == ToolKind::Paste {
+            tools.tool = ToolKind::Select;
+        }
+        selection.dragging = false;
+        selection.rect = None;
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::KeyA) {
+        let Some(map) = map else {
+            return;
+        };
+        if map.width == 0 || map.height == 0 {
+            return;
+        }
+        let rect = SelectionRect {
+            min: UVec2::ZERO,
+            max: UVec2::new(map.width - 1, map.height - 1),
+        };
+        selection.dragging = false;
+        selection.start = rect.min;
+        selection.current = rect.max;
+        selection.rect = Some(rect);
+        tools.tool = ToolKind::Select;
+        return;
+    }
+}
+
+/// 粘贴模式：左键把 Clipboard 贴到鼠标所在格子（作为左上角），并生成 Undo。
+pub fn paste_with_mouse(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    tools: Res<ToolState>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    config: Res<EditorConfig>,
+    runtime: Res<TilesetRuntime>,
+    clipboard: Res<Clipboard>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut undo: ResMut<UndoStack>,
+) {
+    if tools.tool != ToolKind::Paste {
+        return;
+    }
+    if keys.pressed(KeyCode::Space) {
+        return;
+    }
+    if clipboard.width == 0 || clipboard.height == 0 || clipboard.tiles.is_empty() {
+        return;
+    }
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    let Some(mut map) = map else {
+        return;
+    };
+    let Some(tile_entities) = tile_entities else {
+        return;
+    };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok((camera, camera_transform)) = camera_q.single() else {
+        return;
+    };
+    let Some(pos) = cursor_tile_pos(
+        window,
+        camera,
+        camera_transform,
+        &config,
+        tile_entities.width,
+        tile_entities.height,
+    ) else {
+        return;
+    };
+
+    let mut cmd = EditCommand::default();
+    for cy in 0..clipboard.height {
+        for cx in 0..clipboard.width {
+            let dst_x = pos.x + cx;
+            let dst_y = pos.y + cy;
+            if dst_x >= tile_entities.width || dst_y >= tile_entities.height {
+                continue;
+            }
+            let src_idx = (cy * clipboard.width + cx) as usize;
+            let after = clipboard.tiles.get(src_idx).cloned().unwrap_or(None);
+            let dst_idx = map.idx(dst_x, dst_y);
+            if map.tiles[dst_idx] == after {
+                continue;
+            }
+            let before = map.tiles[dst_idx].clone();
+            map.tiles[dst_idx] = after.clone();
+            cmd.changes.push(CellChange { idx: dst_idx, before, after });
+        }
+    }
+
+    if cmd.changes.is_empty() {
+        return;
+    }
+
+    // 局部刷新渲染
+    for ch in &cmd.changes {
+        let entity = tile_entities.entities[ch.idx];
+        if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
+            match &ch.after {
+                Some(TileRef { tileset_id, index }) => {
+                    let Some(atlas) = runtime.by_id.get(tileset_id) else {
+                        sprite.rect = None;
+                        *vis = Visibility::Hidden;
+                        continue;
+                    };
+                    sprite.image = atlas.texture.clone();
+                    sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
+                    *vis = Visibility::Visible;
+                }
+                None => {
+                    *vis = Visibility::Hidden;
+                }
+            }
+        }
+    }
+
+    undo.push(cmd);
 }
 
 /// 保存/读取快捷键：S / L。
@@ -314,6 +1196,7 @@ pub fn save_load_shortcuts(
     tile_entities: Option<Res<TileEntities>>,
     mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
     map: Option<ResMut<TileMapData>>,
+	mut undo: ResMut<UndoStack>,
 ) {
     if keys.just_pressed(KeyCode::KeyS) {
         let Some(map) = map.as_deref() else {
@@ -355,6 +1238,7 @@ pub fn save_load_shortcuts(
             commands.insert_resource(loaded.clone());
             apply_map_to_entities(&runtime, &loaded, &tiles, &mut tiles_q, &config);
             commands.insert_resource(tiles);
+			undo.clear();
             return;
         }
 
@@ -362,6 +1246,7 @@ pub fn save_load_shortcuts(
         if let Some(tile_entities) = tile_entities.as_deref() {
             apply_map_to_entities(&runtime, &loaded, tile_entities, &mut tiles_q, &config);
         }
+		undo.clear();
     }
 }
 
@@ -426,6 +1311,7 @@ pub fn apply_map_to_entities(
 pub fn paint_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+	tools: Res<ToolState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
     config: Res<EditorConfig>,
@@ -435,16 +1321,19 @@ pub fn paint_with_mouse(
     map: Option<ResMut<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
     mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+	mut undo: ResMut<UndoStack>,
+	mut stroke: Local<StrokeState>,
 ) {
+	if tools.tool != ToolKind::Pencil {
+		return;
+	}
+
     // Space 用于平移（Space + 左键拖拽），避免与绘制冲突。
     if keys.pressed(KeyCode::Space) {
         return;
     }
 
     let Some(active_id) = lib.active_id.clone() else {
-        return;
-    };
-    let Some(active_atlas) = runtime.by_id.get(&active_id) else {
         return;
     };
     let Some(mut map) = map else {
@@ -454,66 +1343,491 @@ pub fn paint_with_mouse(
         return;
     };
 
+    let left_down = buttons.pressed(MouseButton::Left);
+    let right_down = buttons.pressed(MouseButton::Right);
+    let left_start = buttons.just_pressed(MouseButton::Left);
+    let right_start = buttons.just_pressed(MouseButton::Right);
+    let left_end = buttons.just_released(MouseButton::Left);
+    let right_end = buttons.just_released(MouseButton::Right);
+
+    // stroke 结束：提交为一个 undo 命令
+    if stroke.active {
+        let ended = match stroke.button {
+            MouseButton::Left => left_end || !left_down,
+            MouseButton::Right => right_end || !right_down,
+            _ => true,
+        };
+        if ended {
+            let cmd = stroke.take_command();
+            undo.push(cmd);
+            stroke.active = false;
+            return;
+        }
+    }
+
     let Ok(window) = windows.single() else {
         return;
     };
-    let Some(cursor_pos) = window.cursor_position() else {
-        return;
-    };
-
-    // 左侧 UI 面板区域不响应绘制
-    if cursor_pos.x <= LEFT_PANEL_WIDTH_PX {
-        return;
-    }
-
-    // 右侧顶部 UI 工具条区域不响应绘制
-    if cursor_pos.y <= RIGHT_TOPBAR_HEIGHT_PX {
-        return;
-    }
-
     let Ok((camera, camera_transform)) = camera_q.single() else {
         return;
     };
-    let Ok(world_pos) = camera.viewport_to_world_2d(camera_transform, cursor_pos) else {
-        return;
-    };
+	let pos = cursor_tile_pos(
+		window,
+		camera,
+		camera_transform,
+		&config,
+		tile_entities.width,
+		tile_entities.height,
+	);
 
-    let tile_w = config.tile_size.x as f32;
-    let tile_h = config.tile_size.y as f32;
-    if tile_w <= 0.0 || tile_h <= 0.0 {
-        return;
+    // 开始一次 stroke：必须在画布区域内按下
+    if !stroke.active {
+		if pos.is_some() {
+			if left_start {
+				stroke.begin(MouseButton::Left);
+			} else if right_start {
+				stroke.begin(MouseButton::Right);
+			}
+		}
     }
 
-    let x = (world_pos.x / tile_w).floor() as i32;
-    let y = (world_pos.y / tile_h).floor() as i32;
-    if x < 0 || y < 0 {
-        return;
-    }
-
-    let (x, y) = (x as u32, y as u32);
-    if x >= tile_entities.width || y >= tile_entities.height {
-        return;
-    }
+    let Some(pos) = pos else {
+		return;
+	};
+	let (x, y) = (pos.x, pos.y);
 
     let idx = map.idx(x, y);
     let entity = tile_entities.entities[idx];
 
-    if buttons.just_pressed(MouseButton::Left) || buttons.pressed(MouseButton::Left) {
-        map.tiles[idx] = Some(TileRef {
-			tileset_id: active_id.clone(),
-			index: state.selected_tile,
-		});
-        if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
-            sprite.image = active_atlas.texture.clone();
-            sprite.rect = Some(rect_for_tile_index(state.selected_tile, active_atlas.columns, config.tile_size));
-            *vis = Visibility::Visible;
+    // 没有在绘制中
+    if !(left_down || right_down) {
+        return;
+    }
+
+    let want_paint = left_down;
+    let want_erase = right_down;
+
+    let desired: Option<TileRef> = if want_paint {
+        Some(TileRef {
+            tileset_id: active_id.clone(),
+            index: state.selected_tile,
+        })
+    } else if want_erase {
+        None
+    } else {
+        return;
+    };
+
+    if map.tiles[idx] == desired {
+        return;
+    }
+
+    let before = map.tiles[idx].clone();
+    map.tiles[idx] = desired.clone();
+
+    stroke.record_change(idx, before.clone(), desired.clone());
+
+    // 局部刷新渲染（单格），避免每帧全量 apply
+    if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
+        match desired {
+            Some(TileRef { ref tileset_id, index }) => {
+                let Some(atlas) = runtime.by_id.get(tileset_id) else {
+                    sprite.rect = None;
+                    *vis = Visibility::Hidden;
+                    return;
+                };
+                sprite.image = atlas.texture.clone();
+                sprite.rect = Some(rect_for_tile_index(index, atlas.columns, config.tile_size));
+                *vis = Visibility::Visible;
+            }
+            None => {
+                *vis = Visibility::Hidden;
+            }
+        }
+    }
+}
+
+pub struct RectDragState {
+    pub active: bool,
+    pub button: MouseButton,
+    pub start: UVec2,
+    pub current: UVec2,
+}
+
+impl Default for RectDragState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            button: MouseButton::Left,
+            start: UVec2::ZERO,
+            current: UVec2::ZERO,
+        }
+    }
+}
+
+/// 矩形工具：拖拽框选并一次性填充/擦除。
+pub fn rect_with_mouse(
+    mut gizmos: Gizmos,
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    tools: Res<ToolState>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    config: Res<EditorConfig>,
+    state: Res<EditorState>,
+    lib: Res<TilesetLibrary>,
+    runtime: Res<TilesetRuntime>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut undo: ResMut<UndoStack>,
+    mut drag: Local<RectDragState>,
+) {
+    if tools.tool != ToolKind::Rect {
+        drag.active = false;
+        return;
+    }
+
+    // Space 用于平移（Space + 左键拖拽），避免与绘制冲突。
+    if keys.pressed(KeyCode::Space) {
+        drag.active = false;
+        return;
+    }
+
+    let Some(mut map) = map else {
+        return;
+    };
+    let Some(tile_entities) = tile_entities else {
+        return;
+    };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok((camera, camera_transform)) = camera_q.single() else {
+        return;
+    };
+
+    let left_start = buttons.just_pressed(MouseButton::Left);
+    let right_start = buttons.just_pressed(MouseButton::Right);
+    let left_down = buttons.pressed(MouseButton::Left);
+    let right_down = buttons.pressed(MouseButton::Right);
+    let left_end = buttons.just_released(MouseButton::Left);
+    let right_end = buttons.just_released(MouseButton::Right);
+
+    let pos = cursor_tile_pos(
+        window,
+        camera,
+        camera_transform,
+        &config,
+        tile_entities.width,
+        tile_entities.height,
+    );
+
+    // 开始拖拽（左键填充 / 右键擦除）
+    if !drag.active {
+        let Some(pos) = pos else {
+            return;
+        };
+        if left_start {
+            drag.active = true;
+            drag.button = MouseButton::Left;
+            drag.start = pos;
+            drag.current = pos;
+        } else if right_start {
+            drag.active = true;
+            drag.button = MouseButton::Right;
+            drag.start = pos;
+            drag.current = pos;
         }
     }
 
-    if buttons.just_pressed(MouseButton::Right) || buttons.pressed(MouseButton::Right) {
-        map.tiles[idx] = None;
-        if let Ok((_sprite, mut vis)) = tiles_q.get_mut(entity) {
-            *vis = Visibility::Hidden;
+    if !drag.active {
+        return;
+    }
+
+    // 更新当前点（仅当鼠标仍在画布内）
+    if let Some(pos) = pos {
+        if (drag.button == MouseButton::Left && left_down)
+            || (drag.button == MouseButton::Right && right_down)
+        {
+            drag.current = pos;
         }
+    }
+
+    let min_x = drag.start.x.min(drag.current.x);
+    let max_x = drag.start.x.max(drag.current.x);
+    let min_y = drag.start.y.min(drag.current.y);
+    let max_y = drag.start.y.max(drag.current.y);
+
+    // 预览框
+    let tile_w = config.tile_size.x as f32;
+    let tile_h = config.tile_size.y as f32;
+    let x0 = min_x as f32 * tile_w;
+    let y0 = min_y as f32 * tile_h;
+    let x1 = (max_x as f32 + 1.0) * tile_w;
+    let y1 = (max_y as f32 + 1.0) * tile_h;
+    let preview_color = Color::srgba(0.25, 0.45, 0.95, 0.95);
+    gizmos.line_2d(Vec2::new(x0, y0), Vec2::new(x1, y0), preview_color);
+    gizmos.line_2d(Vec2::new(x1, y0), Vec2::new(x1, y1), preview_color);
+    gizmos.line_2d(Vec2::new(x1, y1), Vec2::new(x0, y1), preview_color);
+    gizmos.line_2d(Vec2::new(x0, y1), Vec2::new(x0, y0), preview_color);
+
+    // 结束拖拽：提交命令
+    let ended = match drag.button {
+        MouseButton::Left => left_end || !left_down,
+        MouseButton::Right => right_end || !right_down,
+        _ => true,
+    };
+    if !ended {
+        return;
+    }
+
+    let desired: Option<TileRef> = match drag.button {
+        MouseButton::Left => {
+            let Some(active_id) = lib.active_id.clone() else {
+                drag.active = false;
+                return;
+            };
+            Some(TileRef {
+                tileset_id: active_id,
+                index: state.selected_tile,
+            })
+        }
+        MouseButton::Right => None,
+        _ => None,
+    };
+
+    let mut changes: Vec<CellChange> = Vec::new();
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let idx = map.idx(x, y);
+            if idx >= map.tiles.len() {
+                continue;
+            }
+            if map.tiles[idx] == desired {
+                continue;
+            }
+
+            let before = map.tiles[idx].clone();
+            map.tiles[idx] = desired.clone();
+            changes.push(CellChange {
+                idx,
+                before: before.clone(),
+                after: desired.clone(),
+            });
+
+            // 局部刷新渲染
+            let entity = tile_entities.entities[idx];
+            if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
+                match desired {
+                    Some(TileRef { ref tileset_id, index }) => {
+                        let Some(atlas) = runtime.by_id.get(tileset_id) else {
+                            sprite.rect = None;
+                            *vis = Visibility::Hidden;
+                            continue;
+                        };
+                        sprite.image = atlas.texture.clone();
+                        sprite.rect =
+                            Some(rect_for_tile_index(index, atlas.columns, config.tile_size));
+                        *vis = Visibility::Visible;
+                    }
+                    None => {
+                        *vis = Visibility::Hidden;
+                    }
+                }
+            }
+        }
+    }
+
+    undo.push(EditCommand { changes });
+    drag.active = false;
+}
+
+/// 油漆桶（Flood Fill）：点击格子后，按 4 邻接填充“同类 tile”的连通区域。
+///
+/// - 左键：填充为当前选择的 tile
+/// - 右键：擦除（填充为 None）
+pub fn fill_with_mouse(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    tools: Res<ToolState>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    config: Res<EditorConfig>,
+    state: Res<EditorState>,
+    lib: Res<TilesetLibrary>,
+    runtime: Res<TilesetRuntime>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut undo: ResMut<UndoStack>,
+) {
+    if tools.tool != ToolKind::Fill {
+        return;
+    }
+
+    // Space 用于平移（Space + 左键拖拽），避免与点击填充冲突。
+    if keys.pressed(KeyCode::Space) {
+        return;
+    }
+
+    let Some(mut map) = map else {
+        return;
+    };
+    let Some(tile_entities) = tile_entities else {
+        return;
+    };
+
+    let left_start = buttons.just_pressed(MouseButton::Left);
+    let right_start = buttons.just_pressed(MouseButton::Right);
+    if !(left_start || right_start) {
+        return;
+    }
+
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok((camera, camera_transform)) = camera_q.single() else {
+        return;
+    };
+
+    let Some(pos) = cursor_tile_pos(
+        window,
+        camera,
+        camera_transform,
+        &config,
+        tile_entities.width,
+        tile_entities.height,
+    ) else {
+        return;
+    };
+
+    let desired: Option<TileRef> = if left_start {
+        let Some(active_id) = lib.active_id.clone() else {
+            return;
+        };
+        Some(TileRef {
+            tileset_id: active_id,
+            index: state.selected_tile,
+        })
+    } else {
+        None
+    };
+
+    let start_idx = map.idx(pos.x, pos.y);
+    let target = map.tiles[start_idx].clone();
+    if target == desired {
+        return;
+    }
+
+    let w = tile_entities.width;
+    let h = tile_entities.height;
+    let mut visited = vec![false; (w * h) as usize];
+    let mut q = VecDeque::new();
+    visited[start_idx] = true;
+    q.push_back((pos.x, pos.y));
+
+    let mut cmd = EditCommand::default();
+
+    while let Some((x, y)) = q.pop_front() {
+        let idx = map.idx(x, y);
+        if map.tiles[idx] != target {
+            continue;
+        }
+
+        let before = map.tiles[idx].clone();
+        map.tiles[idx] = desired.clone();
+        cmd.changes.push(CellChange {
+            idx,
+            before,
+            after: desired.clone(),
+        });
+
+        let push = |nx: i32, ny: i32, visited: &mut [bool], q: &mut VecDeque<(u32, u32)>, w: u32, h: u32| {
+            if nx < 0 || ny < 0 {
+                return;
+            }
+            let (nx, ny) = (nx as u32, ny as u32);
+            if nx >= w || ny >= h {
+                return;
+            }
+            let nidx = (ny * w + nx) as usize;
+            if visited[nidx] {
+                return;
+            }
+            visited[nidx] = true;
+            q.push_back((nx, ny));
+        };
+
+        push(x as i32 - 1, y as i32, &mut visited, &mut q, w, h);
+        push(x as i32 + 1, y as i32, &mut visited, &mut q, w, h);
+        push(x as i32, y as i32 - 1, &mut visited, &mut q, w, h);
+        push(x as i32, y as i32 + 1, &mut visited, &mut q, w, h);
+    }
+
+    // 局部刷新渲染（只刷改动格子）
+    for ch in &cmd.changes {
+        let entity = tile_entities.entities[ch.idx];
+        if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
+            match &ch.after {
+                Some(TileRef { tileset_id, index }) => {
+                    let Some(atlas) = runtime.by_id.get(tileset_id) else {
+                        sprite.rect = None;
+                        *vis = Visibility::Hidden;
+                        continue;
+                    };
+                    sprite.image = atlas.texture.clone();
+                    sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
+                    *vis = Visibility::Visible;
+                }
+                None => {
+                    *vis = Visibility::Hidden;
+                }
+            }
+        }
+    }
+
+    undo.push(cmd);
+}
+
+pub struct StrokeState {
+    pub active: bool,
+    pub button: MouseButton,
+    changes: HashMap<usize, CellChange>,
+}
+
+impl Default for StrokeState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            button: MouseButton::Left,
+            changes: HashMap::new(),
+        }
+    }
+}
+
+impl StrokeState {
+    pub fn begin(&mut self, button: MouseButton) {
+        self.active = true;
+        self.button = button;
+        self.changes.clear();
+    }
+
+    pub fn record_change(&mut self, idx: usize, before: Option<TileRef>, after: Option<TileRef>) {
+        self.changes
+            .entry(idx)
+            .and_modify(|c| c.after = after.clone())
+            .or_insert(CellChange { idx, before, after });
+    }
+
+    pub fn take_command(&mut self) -> EditCommand {
+        let mut changes: Vec<CellChange> = self
+            .changes
+            .drain()
+            .map(|(_, v)| v)
+            .filter(|c| c.before != c.after)
+            .collect();
+        changes.sort_by_key(|c| c.idx);
+        EditCommand { changes }
     }
 }

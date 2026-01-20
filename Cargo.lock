@@ -4829,6 +4829,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tilemap_core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "tilemap_editor"
 version = "0.1.0"
 dependencies = [

@@ -18,7 +18,8 @@ use super::types::{
 	PaletteRoot, PaletteScroll, PaletteTileButton, TileEntities, TileMapData, TilesetLibrary,
 	TilesetActiveLabel, TilesetBar, TilesetCategoryCycleButton, TilesetCategoryLabel, TilesetLoading,
 	TilesetMenuRoot, TilesetRuntime, TilesetSelectItem, TilesetToggleButton, UiRoot, UiState,
-	DEFAULT_UI_FONT_PATH, UiFont,
+	DEFAULT_UI_FONT_PATH, ShiftMapMode, ShiftMapSettings, ShiftModeButton, ShiftModeLabel, ToolButton,
+	ToolKind, ToolState, UiFont, UndoStack,
 };
 use super::world::apply_map_to_entities;
 
@@ -293,6 +294,145 @@ fn spawn_ui_root(commands: &mut Commands) {
 		.with_children(|p| {
 			p.spawn((
 				Text::new("导出"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		// --- 工具栏（参考 RM：铅笔/矩形/填充/选择） ---
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Pencil),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("笔刷(1)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Rect),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("矩形(2)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Fill),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("填充(3)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Select),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("选择(4)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Paste),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("粘贴(5)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Eyedropper),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("吸管(I)"),
 				TextFont {
 					font_size: 14.0,
 					..default()
@@ -611,6 +751,39 @@ fn spawn_ui_root(commands: &mut Commands) {
 				TextColor(Color::WHITE),
 			));
 		});
+
+		// Shift Map 模式：空白 / 环绕
+		p.spawn((
+			Text::new("Shift:"),
+			TextFont {
+				font_size: 13.0,
+				..default()
+			},
+			TextColor(Color::WHITE),
+		));
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ShiftModeButton,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("空白"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+				ShiftModeLabel,
+			));
+		});
 	});
 
 	commands.entity(palette_scroll).add_child(palette_root);
@@ -711,6 +884,89 @@ pub fn map_size_widget_interactions(
 				*bg = BackgroundColor(UI_BUTTON);
 			}
 		}
+	}
+}
+
+pub fn tool_button_click(
+	mut tools: ResMut<ToolState>,
+	mut q: Query<(&Interaction, &ToolButton, &mut BackgroundColor), Changed<Interaction>>,
+) {
+	let mut picked: Option<ToolKind> = None;
+	for (interaction, btn, mut bg) in q.iter_mut() {
+		match *interaction {
+			Interaction::Pressed => {
+				picked = Some(btn.0);
+				*bg = BackgroundColor(UI_BUTTON_PRESS);
+			}
+			Interaction::Hovered => {
+				*bg = BackgroundColor(UI_BUTTON_HOVER);
+			}
+			Interaction::None => {
+				*bg = BackgroundColor(UI_BUTTON);
+			}
+		}
+	}
+
+	if let Some(next) = picked {
+		tools.tool = next;
+	}
+}
+
+pub fn sync_tool_button_styles(
+	tools: Res<ToolState>,
+	mut q: Query<(&ToolButton, &Interaction, &mut BackgroundColor)>,
+) {
+	for (btn, interaction, mut bg) in q.iter_mut() {
+		if btn.0 == tools.tool {
+			*bg = BackgroundColor(UI_HIGHLIGHT);
+			continue;
+		}
+
+		*bg = match *interaction {
+			Interaction::Pressed => BackgroundColor(UI_BUTTON_PRESS),
+			Interaction::Hovered => BackgroundColor(UI_BUTTON_HOVER),
+			Interaction::None => BackgroundColor(UI_BUTTON),
+		};
+	}
+}
+
+pub fn shift_mode_button_click(
+	mut settings: ResMut<ShiftMapSettings>,
+	mut q: Query<(&Interaction, &mut BackgroundColor), (Changed<Interaction>, With<ShiftModeButton>)>,
+) {
+	for (interaction, mut bg) in q.iter_mut() {
+		match *interaction {
+			Interaction::Pressed => {
+				settings.mode = match settings.mode {
+					ShiftMapMode::Blank => ShiftMapMode::Wrap,
+					ShiftMapMode::Wrap => ShiftMapMode::Blank,
+				};
+				*bg = BackgroundColor(UI_BUTTON_PRESS);
+			}
+			Interaction::Hovered => {
+				*bg = BackgroundColor(UI_BUTTON_HOVER);
+			}
+			Interaction::None => {
+				*bg = BackgroundColor(UI_BUTTON);
+			}
+		}
+	}
+}
+
+pub fn update_shift_mode_label(
+	settings: Res<ShiftMapSettings>,
+	mut q: Query<&mut Text, With<ShiftModeLabel>>,
+) {
+	if !settings.is_changed() {
+		return;
+	}
+
+	let label = match settings.mode {
+		ShiftMapMode::Blank => "空白",
+		ShiftMapMode::Wrap => "环绕",
+	};
+	for mut t in q.iter_mut() {
+		*t = Text::new(label);
 	}
 }
 
@@ -823,6 +1079,7 @@ pub fn apply_custom_map_size(
 	existing_tiles: Option<Res<TileEntities>>,
 	mut sprite_vis_q: Query<(&mut Sprite, &mut Visibility)>,
 	map: Option<ResMut<TileMapData>>,
+	mut undo: ResMut<UndoStack>,
 ) {
 	if !input.apply_requested {
 		return;
@@ -844,6 +1101,7 @@ pub fn apply_custom_map_size(
 
 	config.map_size = UVec2::new(width, height);
 	commands.insert_resource(new_map.clone());
+	undo.clear();
 
 	// 重建格子实体
 	if let Some(existing_tiles) = existing_tiles.as_deref() {
@@ -1265,6 +1523,7 @@ pub fn action_button_click(
 	mut ui_state: ResMut<UiState>,
 	mut sprite_vis_q: Query<(&mut Sprite, &mut Visibility)>,
 	map: Option<ResMut<TileMapData>>,
+	mut undo: ResMut<UndoStack>,
 ) {
 	let mut requested: Option<ActionKind> = None;
 
@@ -1314,6 +1573,7 @@ pub fn action_button_click(
 			merge_tilesets_from_map(&asset_server, &mut lib, &mut tileset_loading, tilesets);
 			save_tileset_library(&lib);
 			ui_state.built_for_tileset_path.clear();
+			undo.clear();
 
 			// 尺寸变化：更新 config + 重建格子实体
 			if config.map_size.x != loaded.width || config.map_size.y != loaded.height {
@@ -1354,6 +1614,7 @@ pub fn action_button_click(
 
 			config.map_size = UVec2::new(width, height);
 			commands.insert_resource(new_map.clone());
+			undo.clear();
 
 			// 重建格子实体
 			if let Some(existing_tiles) = tile_entities.as_deref() {
@@ -1384,6 +1645,7 @@ pub fn action_button_click(
 			merge_tilesets_from_map(&asset_server, &mut lib, &mut tileset_loading, tilesets);
 			save_tileset_library(&lib);
 			ui_state.built_for_tileset_path.clear();
+			undo.clear();
 
 			// 尺寸变化：更新 config + 重建格子实体
 			if config.map_size.x != loaded.width || config.map_size.y != loaded.height {
