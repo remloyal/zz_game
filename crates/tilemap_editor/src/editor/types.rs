@@ -385,6 +385,9 @@ pub struct PastePreview {
 #[derive(Component)]
 pub struct PastePreviewTile;
 
+#[derive(Component)]
+pub struct SelectionMovePreviewTile;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SelectionRect {
     pub min: UVec2,
@@ -407,6 +410,8 @@ pub struct SelectionState {
     pub start: UVec2,
     pub current: UVec2,
     pub rect: Option<SelectionRect>,
+	/// 是否正在“拖拽移动选区内容”（与 dragging=框选不同）。
+	pub moving: bool,
 }
 
 #[derive(Component, Clone, Copy)]

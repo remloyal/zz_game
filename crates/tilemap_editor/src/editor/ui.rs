@@ -2154,6 +2154,11 @@ pub fn update_hud_text(
 			if paste.flip_x { "开" } else { "关" },
 			if paste.flip_y { "开" } else { "关" },
 		));
+		if tools.return_after_paste.is_some() {
+			msg.push_str("\n模式: 临时粘贴（贴一次自动返回，按 Esc 取消）");
+		} else {
+			msg.push_str("\n模式: 锁定粘贴（可连续点击粘贴，按 Esc 退出；按 5 进入此模式）");
+		}
 
 		if clipboard.width == 0 || clipboard.height == 0 || clipboard.tiles.is_empty() {
 			msg.push_str("\n剪贴板: 空（先用选择工具 Ctrl+C 复制一块区域）");

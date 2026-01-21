@@ -49,6 +49,7 @@ use world::{
     paste_transform_shortcuts,
 	context_menu_clear_consumption, context_menu_open_close,
 	update_paste_preview,
+    selection_move_with_mouse,
     apply_context_menu_command,
 };
 
@@ -101,7 +102,7 @@ pub fn run() {
         .init_resource::<ContextMenuState>()
         .init_resource::<ContextMenuCommand>()
 		.init_resource::<PasteState>()
-        .init_resource::<PastePreview>()
+		.init_resource::<PastePreview>()
 		.init_resource::<SelectionState>()
 		.init_resource::<ShiftMapSettings>()
         .init_resource::<UndoStack>()
@@ -186,8 +187,14 @@ pub fn run() {
                 recenter_camera_on_map_change,
                 camera_zoom,
                 camera_pan,
+            ),
+        )
+        .add_systems(
+            Update,
+            (
                 draw_canvas_helpers,
                 update_paste_preview,
+                selection_move_with_mouse,
                 eyedropper_with_mouse,
                 paint_with_mouse,
 				rect_with_mouse,

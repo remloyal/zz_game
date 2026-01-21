@@ -10,6 +10,7 @@ use bevy::input::mouse::MouseWheel;
 use bevy::window::PrimaryWindow;
 use bevy::ecs::message::MessageReader;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 
 use super::persistence::{load_map_from_file, save_map_to_file};
@@ -17,7 +18,7 @@ use super::tileset::{merge_tilesets_from_map, rect_for_tile_index, save_tileset_
 use super::types::{
     CellChange, EditCommand, EditorConfig, EditorState, PanState, TileEntities, TileMapData, TileRef,
     Clipboard, ContextMenuAction, ContextMenuCommand, ContextMenuState, MapSizeFocus, MapSizeInput, PasteState,
-    SelectionRect, SelectionState, PastePreview, PastePreviewTile, ShiftMapMode, ShiftMapSettings,
+    SelectionRect, SelectionState, PastePreview, PastePreviewTile, SelectionMovePreviewTile, ShiftMapMode, ShiftMapSettings,
     TilesetLibrary, TilesetLoading, TilesetRuntime, ToolKind, ToolState, UndoStack,
     WorldCamera,
 };
@@ -310,12 +311,535 @@ fn paste_dst_xy(sx: u32, sy: u32, clipboard: &Clipboard, paste: &PasteState) -> 
     Some((x, y))
 }
 
+fn mat_mul(a: [[i32; 2]; 2], b: [[i32; 2]; 2]) -> [[i32; 2]; 2] {
+    [
+        [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
+        [a[1][0] * b[0][0] + a[1][1] * b[1][0], a[1][0] * b[0][1] + a[1][1] * b[1][1]],
+    ]
+}
+
+fn rot_mat_cw(rot: u8) -> [[i32; 2]; 2] {
+    match rot % 4 {
+        0 => [[1, 0], [0, 1]],
+        1 => [[0, 1], [-1, 0]],
+        2 => [[-1, 0], [0, -1]],
+        3 => [[0, -1], [1, 0]],
+        _ => [[1, 0], [0, 1]],
+    }
+}
+
+fn flip_mat(flip_x: bool, flip_y: bool) -> [[i32; 2]; 2] {
+    let sx = if flip_x { -1 } else { 1 };
+    let sy = if flip_y { -1 } else { 1 };
+    [[sx, 0], [0, sy]]
+}
+
+fn tile_orientation_mat(rot: u8, flip_x: bool, flip_y: bool) -> [[i32; 2]; 2] {
+    // 渲染约定：Sprite 先 flip（本地坐标），再由 Transform 做旋转。
+    // 因此矩阵为：M = R(rot_cw) * F(flip_x, flip_y)
+    mat_mul(rot_mat_cw(rot), flip_mat(flip_x, flip_y))
+}
+
+fn mat_to_tile_orientation(m: [[i32; 2]; 2]) -> Option<(u8, bool, bool)> {
+    for rot in 0u8..=3 {
+        for flip_x in [false, true] {
+            for flip_y in [false, true] {
+                if tile_orientation_mat(rot, flip_x, flip_y) == m {
+                    return Some((rot, flip_x, flip_y));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn apply_group_transform_to_tile(tile: &mut TileRef, group: [[i32; 2]; 2]) {
+    let m = tile_orientation_mat(tile.rot, tile.flip_x, tile.flip_y);
+    let m2 = mat_mul(group, m);
+    if let Some((rot, flip_x, flip_y)) = mat_to_tile_orientation(m2) {
+        tile.rot = rot;
+        tile.flip_x = flip_x;
+        tile.flip_y = flip_y;
+    } else {
+        // 理论上不会发生（我们枚举了所有组合）。兜底不改变。
+    }
+}
+
+fn selection_rotate_cw_mapping(sx: u32, sy: u32, _w: u32, h: u32) -> (u32, u32) {
+    // (sx,sy) in w*h -> (dx,dy) in h*w
+    (h - 1 - sy, sx)
+}
+
+fn selection_rotate_ccw_mapping(sx: u32, sy: u32, w: u32, _h: u32) -> (u32, u32) {
+    // (sx,sy) in w*h -> (dx,dy) in h*w
+    (sy, w - 1 - sx)
+}
+
+fn selection_flip_x_mapping(sx: u32, sy: u32, w: u32, _h: u32) -> (u32, u32) {
+    (w - 1 - sx, sy)
+}
+
+fn selection_flip_y_mapping(sx: u32, sy: u32, _w: u32, h: u32) -> (u32, u32) {
+    (sx, h - 1 - sy)
+}
+
+fn apply_selection_transform(
+    action: ContextMenuAction,
+    selection: &mut SelectionState,
+    map: &mut TileMapData,
+    tile_entities: &TileEntities,
+    runtime: &TilesetRuntime,
+    config: &EditorConfig,
+    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    undo: &mut UndoStack,
+) -> bool {
+    let Some(rect) = selection.rect else {
+        return false;
+    };
+    let w = rect.width();
+    let h = rect.height();
+    if w == 0 || h == 0 {
+        return false;
+    }
+
+    let (new_w, new_h) = match action {
+        ContextMenuAction::PasteRotateCw | ContextMenuAction::PasteRotateCcw => (h, w),
+        _ => (w, h),
+    };
+
+    let new_max_x = rect.min.x + new_w - 1;
+    let new_max_y = rect.min.y + new_h - 1;
+    if new_max_x >= map.width || new_max_y >= map.height {
+        return false;
+    }
+    let new_rect = SelectionRect {
+        min: rect.min,
+        max: UVec2::new(new_max_x, new_max_y),
+    };
+
+    // 读取源 buffer（w*h）
+    let mut src: Vec<Option<TileRef>> = Vec::with_capacity((w * h) as usize);
+    for sy in 0..h {
+        for sx in 0..w {
+            let x = rect.min.x + sx;
+            let y = rect.min.y + sy;
+            src.push(map.tiles[map.idx(x, y)].clone());
+        }
+    }
+
+    // 生成 dst buffer（new_w*new_h）
+    let mut dst: Vec<Option<TileRef>> = vec![None; (new_w * new_h) as usize];
+
+    let (mapping, group_mat): (fn(u32, u32, u32, u32) -> (u32, u32), [[i32; 2]; 2]) = match action {
+        ContextMenuAction::PasteRotateCw => (selection_rotate_cw_mapping, rot_mat_cw(1)),
+        ContextMenuAction::PasteRotateCcw => (selection_rotate_ccw_mapping, rot_mat_cw(3)),
+        ContextMenuAction::PasteFlipX => (selection_flip_x_mapping, flip_mat(true, false)),
+        ContextMenuAction::PasteFlipY => (selection_flip_y_mapping, flip_mat(false, true)),
+        ContextMenuAction::PasteReset => (|sx, sy, _w, _h| (sx, sy), [[1, 0], [0, 1]]),
+        _ => return false,
+    };
+
+    for sy in 0..h {
+        for sx in 0..w {
+            let i = (sy * w + sx) as usize;
+            let mut tile = src[i].clone();
+            if let Some(t) = tile.as_mut() {
+                match action {
+                    ContextMenuAction::PasteReset => {
+                        t.rot = 0;
+                        t.flip_x = false;
+                        t.flip_y = false;
+                    }
+                    _ => {
+                        apply_group_transform_to_tile(t, group_mat);
+                    }
+                }
+            }
+
+            let (dx, dy) = mapping(sx, sy, w, h);
+            if dx < new_w && dy < new_h {
+                dst[(dy * new_w + dx) as usize] = tile;
+            }
+        }
+    }
+
+    // 写回：只更新 old_rect ∪ new_rect。
+    // 注意：两者“并集”的包围盒会包含额外格子（例如 5x2 旋转成 2x5），
+    // 若直接遍历包围盒会误清空选区外的内容。
+    let mut touched: HashSet<usize> = HashSet::new();
+    let mut cmd = EditCommand::default();
+
+    let mut apply_cell = |x: u32, y: u32, after: Option<TileRef>, map: &mut TileMapData, cmd: &mut EditCommand| {
+        let idx = map.idx(x, y);
+        if !touched.insert(idx) {
+            return;
+        }
+        let before = map.tiles[idx].clone();
+        if before != after {
+            map.tiles[idx] = after.clone();
+            cmd.changes.push(CellChange { idx, before, after });
+        }
+    };
+
+    // 1) old_rect：不在 new_rect 的格子要清空；重叠格子写入 new_rect 的结果。
+    for y in rect.min.y..=rect.max.y {
+        for x in rect.min.x..=rect.max.x {
+            let after = if x >= new_rect.min.x && x <= new_rect.max.x && y >= new_rect.min.y && y <= new_rect.max.y {
+                let lx = x - new_rect.min.x;
+                let ly = y - new_rect.min.y;
+                dst[(ly * new_w + lx) as usize].clone()
+            } else {
+                None
+            };
+            apply_cell(x, y, after, map, &mut cmd);
+        }
+    }
+
+    // 2) new_rect：old_rect 外的新扩展区域也需要写入。
+    for y in new_rect.min.y..=new_rect.max.y {
+        for x in new_rect.min.x..=new_rect.max.x {
+            let lx = x - new_rect.min.x;
+            let ly = y - new_rect.min.y;
+            let after = dst[(ly * new_w + lx) as usize].clone();
+            apply_cell(x, y, after, map, &mut cmd);
+        }
+    }
+
+    if cmd.changes.is_empty() {
+        // 即使没有地图改动，也认为“选区变换”被处理了，避免继续把同一按键作用到单格/预设粘贴。
+        if matches!(action, ContextMenuAction::PasteRotateCw | ContextMenuAction::PasteRotateCcw) {
+            selection.rect = Some(new_rect);
+            selection.start = new_rect.min;
+            selection.current = new_rect.max;
+        }
+        return true;
+    }
+
+    for ch in &cmd.changes {
+        let entity = tile_entities.entities[ch.idx];
+        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
+            apply_tile_visual(runtime, &ch.after, &mut sprite, &mut tf, &mut vis, config);
+        }
+    }
+    undo.push(cmd);
+
+    if matches!(action, ContextMenuAction::PasteRotateCw | ContextMenuAction::PasteRotateCcw) {
+        selection.rect = Some(new_rect);
+        selection.start = new_rect.min;
+        selection.current = new_rect.max;
+    }
+    true
+}
+
 fn tile_world_center(x: u32, y: u32, tile_size: UVec2, z: f32) -> Vec3 {
     let tile_w = tile_size.x as f32;
     let tile_h = tile_size.y as f32;
     let world_x = (x as f32 + 0.5) * tile_w;
     let world_y = (y as f32 + 0.5) * tile_h;
     Vec3::new(world_x, world_y, z)
+}
+
+#[derive(Default)]
+pub(crate) struct SelectionMoveDrag {
+    active: bool,
+    copy: bool,
+    start: UVec2,
+    current: UVec2,
+    rect: SelectionRect,
+    buf: Vec<Option<TileRef>>,
+	preview_entities: Vec<Entity>,
+	preview_dims: (u32, u32),
+}
+
+fn point_in_rect(p: UVec2, r: SelectionRect) -> bool {
+    p.x >= r.min.x && p.x <= r.max.x && p.y >= r.min.y && p.y <= r.max.y
+}
+
+fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32 {
+    v.max(lo).min(hi)
+}
+
+fn rect_shift(rect: SelectionRect, dx: i32, dy: i32) -> SelectionRect {
+    let min_x = (rect.min.x as i32 + dx) as u32;
+    let min_y = (rect.min.y as i32 + dy) as u32;
+    let max_x = (rect.max.x as i32 + dx) as u32;
+    let max_y = (rect.max.y as i32 + dy) as u32;
+    SelectionRect {
+        min: UVec2::new(min_x, min_y),
+        max: UVec2::new(max_x, max_y),
+    }
+}
+
+/// 选区内容拖拽：在 Select 工具下，按住左键在选区内拖动来移动内容；按住 Ctrl 拖动为复制移动。
+///
+/// - 拖拽中显示半透明“幽灵预览”
+/// - 松开鼠标提交 Undo
+pub fn selection_move_with_mouse(
+    mut commands: Commands,
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    tools: Res<ToolState>,
+    menu: Res<ContextMenuState>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    config: Res<EditorConfig>,
+    runtime: Res<TilesetRuntime>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility), Without<SelectionMovePreviewTile>>,
+    mut undo: ResMut<UndoStack>,
+    mut selection: ResMut<SelectionState>,
+    mut preview_q: Query<(&mut Sprite, &mut Transform, &mut Visibility), With<SelectionMovePreviewTile>>,
+    mut drag: Local<SelectionMoveDrag>,
+) {
+    // 默认隐藏预览（若需要会在后续显示）。
+    if !drag.active {
+        for &e in &drag.preview_entities {
+            if let Ok((_s, _t, mut v)) = preview_q.get_mut(e) {
+                *v = Visibility::Hidden;
+            }
+        }
+        selection.moving = false;
+    }
+
+    if tools.tool != ToolKind::Select {
+        drag.active = false;
+        selection.moving = false;
+        return;
+    }
+    if menu.open || menu.consume_left_click {
+        drag.active = false;
+        selection.moving = false;
+        return;
+    }
+    // Space 用于平移（Space + 左键拖拽）。
+    if keys.pressed(KeyCode::Space) {
+        drag.active = false;
+        selection.moving = false;
+        return;
+    }
+    // Alt+拖拽保留给“从任意工具框选”。
+    if keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight) {
+        drag.active = false;
+        selection.moving = false;
+        return;
+    }
+
+    let Some(rect) = selection.rect else {
+        drag.active = false;
+        selection.moving = false;
+        return;
+    };
+    let Some(mut map) = map else {
+        drag.active = false;
+        selection.moving = false;
+        return;
+    };
+    let Some(tile_entities) = tile_entities else {
+        drag.active = false;
+        selection.moving = false;
+        return;
+    };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok((camera, camera_transform)) = camera_q.single() else {
+        return;
+    };
+
+    let left_start = buttons.just_pressed(MouseButton::Left);
+    let left_down = buttons.pressed(MouseButton::Left);
+    let left_end = buttons.just_released(MouseButton::Left);
+
+    let pos = cursor_tile_pos(
+        window,
+        camera,
+        camera_transform,
+        &config,
+        tile_entities.width,
+        tile_entities.height,
+    );
+
+    // 开始拖拽：必须点击在当前选区内。
+    if !drag.active {
+        if !left_start {
+            return;
+        }
+        let Some(pos) = pos else {
+            return;
+        };
+        if !point_in_rect(pos, rect) {
+            return;
+        }
+
+        let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+        drag.active = true;
+        drag.copy = ctrl;
+        drag.start = pos;
+        drag.current = pos;
+        drag.rect = rect;
+
+        let w = rect.width();
+        let h = rect.height();
+        drag.buf.clear();
+        drag.buf.reserve((w * h) as usize);
+        for y in rect.min.y..=rect.max.y {
+            for x in rect.min.x..=rect.max.x {
+                drag.buf.push(map.tiles[map.idx(x, y)].clone());
+            }
+        }
+
+        selection.moving = true;
+    }
+
+    if !drag.active {
+        return;
+    }
+
+    // 拖拽中：更新 current（仅当鼠标在画布内）。
+    if let Some(pos) = pos {
+        if left_down {
+            drag.current = pos;
+        }
+    }
+
+    // 计算偏移，并限制在地图范围内。
+    let mut dx = drag.current.x as i32 - drag.start.x as i32;
+    let mut dy = drag.current.y as i32 - drag.start.y as i32;
+    let min_dx = -(drag.rect.min.x as i32);
+    let max_dx = map.width as i32 - 1 - drag.rect.max.x as i32;
+    let min_dy = -(drag.rect.min.y as i32);
+    let max_dy = map.height as i32 - 1 - drag.rect.max.y as i32;
+    dx = clamp_i32(dx, min_dx, max_dx);
+    dy = clamp_i32(dy, min_dy, max_dy);
+
+    let new_rect = rect_shift(drag.rect, dx, dy);
+    let w = drag.rect.width();
+    let h = drag.rect.height();
+
+    // 确保预览实体数量匹配。
+    let want = (w * h) as usize;
+    if drag.preview_dims != (w, h) || drag.preview_entities.len() != want {
+        for &e in &drag.preview_entities {
+            commands.entity(e).despawn();
+        }
+        drag.preview_entities.clear();
+        drag.preview_dims = (w, h);
+        for _ in 0..want {
+            let e = commands
+                .spawn((
+                    Sprite {
+                        image: Handle::<Image>::default(),
+                        rect: None,
+                        color: Color::srgba(1.0, 1.0, 1.0, 0.60),
+                        ..default()
+                    },
+                    Transform::from_translation(Vec3::ZERO),
+                    Visibility::Hidden,
+                    SelectionMovePreviewTile,
+                ))
+                .id();
+            drag.preview_entities.push(e);
+        }
+    }
+
+    // 更新预览 sprite：直接把 buf 按相对坐标贴到 new_rect。
+    for cy in 0..h {
+        for cx in 0..w {
+            let i = (cy * w + cx) as usize;
+            let e = drag.preview_entities[i];
+            let Ok((mut sprite, mut tf, mut vis)) = preview_q.get_mut(e) else {
+                continue;
+            };
+            let dst_x = new_rect.min.x + cx;
+            let dst_y = new_rect.min.y + cy;
+            tf.translation = tile_world_center(dst_x, dst_y, config.tile_size, 6.0);
+            apply_tile_visual(&runtime, &drag.buf[i], &mut sprite, &mut tf, &mut vis, &config);
+            sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.60);
+        }
+    }
+
+    // 结束拖拽：提交变更。
+    let ended = left_end || !left_down;
+    if !ended {
+        return;
+    }
+
+    // 隐藏预览
+    for &e in &drag.preview_entities {
+        if let Ok((_s, _t, mut v)) = preview_q.get_mut(e) {
+            *v = Visibility::Hidden;
+        }
+    }
+
+    let mut cmd = EditCommand::default();
+    let mut touched: HashSet<usize> = HashSet::new();
+
+    // helper：写一个格子的 after，并记录变更
+    let mut apply_cell = |x: u32, y: u32, after: Option<TileRef>, map: &mut TileMapData, cmd: &mut EditCommand| {
+        let idx = map.idx(x, y);
+        if !touched.insert(idx) {
+            return;
+        }
+        let before = map.tiles[idx].clone();
+        if before != after {
+            map.tiles[idx] = after.clone();
+            cmd.changes.push(CellChange { idx, before, after });
+        }
+    };
+
+    // 计算 new_rect 内某格对应的 buf tile
+    let buf_at = |x: u32, y: u32, new_rect: SelectionRect, w: u32, buf: &Vec<Option<TileRef>>| -> Option<TileRef> {
+        let lx = x - new_rect.min.x;
+        let ly = y - new_rect.min.y;
+        buf[(ly * w + lx) as usize].clone()
+    };
+
+    if drag.copy {
+        // 复制移动：只写入 new_rect，原区域保留。
+        for y in new_rect.min.y..=new_rect.max.y {
+            for x in new_rect.min.x..=new_rect.max.x {
+                let after = buf_at(x, y, new_rect, w, &drag.buf);
+                apply_cell(x, y, after, &mut map, &mut cmd);
+            }
+        }
+    } else {
+        // 移动：更新 old_rect ∪ new_rect。
+        for y in drag.rect.min.y..=drag.rect.max.y {
+            for x in drag.rect.min.x..=drag.rect.max.x {
+                let after = if point_in_rect(UVec2::new(x, y), new_rect) {
+                    buf_at(x, y, new_rect, w, &drag.buf)
+                } else {
+                    None
+                };
+                apply_cell(x, y, after, &mut map, &mut cmd);
+            }
+        }
+        for y in new_rect.min.y..=new_rect.max.y {
+            for x in new_rect.min.x..=new_rect.max.x {
+                let after = buf_at(x, y, new_rect, w, &drag.buf);
+                apply_cell(x, y, after, &mut map, &mut cmd);
+            }
+        }
+    }
+
+    // 刷新渲染
+    for ch in &cmd.changes {
+        let entity = tile_entities.entities[ch.idx];
+        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
+            apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
+        }
+    }
+
+    undo.push(cmd);
+
+    // 更新选择框
+    selection.rect = Some(new_rect);
+    selection.start = new_rect.min;
+    selection.current = new_rect.max;
+
+    drag.active = false;
+    selection.moving = false;
 }
 
 /// 粘贴“幽灵预览”：在鼠标下方显示将要贴的图块（半透明），旋转/翻转会立即可见。
@@ -912,6 +1436,10 @@ pub fn eyedropper_with_mouse(
     if menu.open || menu.consume_left_click {
         return;
     }
+    // Alt + 拖拽用于“从任意工具框选”，避免与吸管冲突。
+    if keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight) {
+        return;
+    }
     if keys.pressed(KeyCode::Space) {
         return;
     }
@@ -1182,7 +1710,7 @@ pub fn move_selection_shortcuts(
 pub fn select_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    tools: Res<ToolState>,
+    mut tools: ResMut<ToolState>,
     menu: Res<ContextMenuState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
@@ -1190,7 +1718,13 @@ pub fn select_with_mouse(
     tile_entities: Option<Res<TileEntities>>,
     mut selection: ResMut<SelectionState>,
 ) {
-    if tools.tool != ToolKind::Select {
+    // 正在拖拽移动选区内容时，不要同时开始框选。
+    if selection.moving {
+        return;
+    }
+    let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+    let allow_select = tools.tool == ToolKind::Select || (alt && tools.tool != ToolKind::Paste);
+    if !allow_select {
         return;
     }
     if menu.open || menu.consume_left_click {
@@ -1227,6 +1761,12 @@ pub fn select_with_mouse(
             let Some(pos) = pos else {
                 return;
             };
+
+            // Alt+拖拽：从其它工具进入后，切到选择工具。
+            if alt && tools.tool != ToolKind::Select {
+                tools.tool = ToolKind::Select;
+            }
+
             selection.dragging = true;
             selection.start = pos;
             selection.current = pos;
@@ -1329,6 +1869,7 @@ pub fn paste_transform_shortcuts(
     clipboard: Res<Clipboard>,
     runtime: Res<TilesetRuntime>,
     config: Res<EditorConfig>,
+    mut selection: ResMut<SelectionState>,
     map: Option<ResMut<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
     mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
@@ -1357,6 +1898,10 @@ pub fn paste_transform_shortcuts(
         return;
     };
 
+    // 需要在“选区变换失败后”继续尝试单格/预设变换：
+    // 因此不能提前把 map move 掉。
+    let mut map_opt = map;
+
     // 粘贴模式：永远调整粘贴变换（预览/落地）。
     if tools.tool == ToolKind::Paste {
         match action {
@@ -1374,6 +1919,29 @@ pub fn paste_transform_shortcuts(
             paste.flip_y
         );
         return;
+    }
+
+    // 选择工具且存在选区：优先对“选区内容”做旋转/翻转/重置（更接近 RM 的使用习惯）。
+    if tools.tool == ToolKind::Select {
+        if selection.rect.is_some() {
+            if let (Some(mut map), Some(tile_entities)) = (map_opt.take(), tile_entities.as_deref()) {
+                let applied = apply_selection_transform(
+                    action,
+                    &mut selection,
+                    &mut map,
+                    tile_entities,
+                    &runtime,
+                    &config,
+                    &mut tiles_q,
+                    &mut undo,
+                );
+                map_opt = Some(map);
+                if applied {
+                    info!("selection transform applied: {:?}", action);
+                    return;
+                }
+            }
+        }
     }
 
     // 非粘贴模式：优先作用于鼠标指向的“已有图块”（只要格子里有 tile）。
@@ -1401,16 +1969,16 @@ pub fn paste_transform_shortcuts(
     if map_pos.is_some() {
         did_tile = match action {
             ContextMenuAction::PasteRotateCcw => {
-                try_rotate_map_tile_ccw(map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
+                try_rotate_map_tile_ccw(map_pos, map_opt, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
             }
             ContextMenuAction::PasteRotateCw => {
-                try_rotate_map_tile_cw(map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
+                try_rotate_map_tile_cw(map_pos, map_opt, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
             }
             ContextMenuAction::PasteFlipX => {
-                try_flip_map_tile_x(map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
+                try_flip_map_tile_x(map_pos, map_opt, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
             }
             ContextMenuAction::PasteFlipY => {
-                try_flip_map_tile_y(map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
+                try_flip_map_tile_y(map_pos, map_opt, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
             }
             _ => false,
         };
@@ -2046,9 +2614,12 @@ pub fn paste_with_mouse(
 
     undo.push(cmd);
 
-	// 贴完后回到进入粘贴前的工具，让流程更连贯。
-	let back = tools.return_after_paste.take().unwrap_or(ToolKind::Select);
-	tools.tool = back;
+    // 贴完后的工具行为：
+    // - Ctrl+V/菜单进入的“临时粘贴”（return_after_paste 有值）：贴一次就自动回原工具。
+    // - 用户显式切到 Paste（如按 5）：允许连续多次粘贴，按 Esc/菜单退出。
+    if let Some(back) = tools.return_after_paste.take() {
+        tools.tool = back;
+    }
 }
 
 /// 保存/读取快捷键：S / L。
@@ -2182,6 +2753,11 @@ pub fn paint_with_mouse(
 		return;
 	}
     if menu.open || menu.consume_left_click {
+        return;
+    }
+
+    // Alt + 拖拽用于“从任意工具框选”，避免与绘制冲突。
+    if keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight) {
         return;
     }
 
@@ -2330,6 +2906,12 @@ pub fn rect_with_mouse(
 		return;
 	}
 
+    // Alt + 拖拽用于“从任意工具框选”，避免与 Rect 冲突。
+    if keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight) {
+        drag.active = false;
+        return;
+    }
+
     // Space 用于平移（Space + 左键拖拽），避免与绘制冲突。
     if keys.pressed(KeyCode::Space) {
         drag.active = false;
@@ -2391,7 +2973,7 @@ pub fn rect_with_mouse(
     let min_y = drag.start.y.min(drag.current.y);
     let max_y = drag.start.y.max(drag.current.y);
 
-    // 预览框
+    // 开始框选
     let tile_w = config.tile_size.x as f32;
     let tile_h = config.tile_size.y as f32;
     let x0 = min_x as f32 * tile_w;
@@ -2484,6 +3066,11 @@ pub fn fill_with_mouse(
 	if menu.open || menu.consume_left_click {
 		return;
 	}
+
+    // Alt + 拖拽用于“从任意工具框选”，避免与 Flood Fill 冲突。
+    if keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight) {
+        return;
+    }
 
     // Space 用于平移（Space + 左键拖拽），避免与点击填充冲突。
     if keys.pressed(KeyCode::Space) {
