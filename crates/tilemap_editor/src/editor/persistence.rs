@@ -109,6 +109,9 @@ pub fn load_map_from_file(path: &str) -> Result<(TileMapData, Vec<TilesetEntry>)
         .map(|t| t.map(|index| TileRef {
             tileset_id: String::new(),
             index,
+			rot: 0,
+			flip_x: false,
+			flip_y: false,
         }))
         .collect();
 

@@ -31,6 +31,13 @@ pub type TilesetId = String;
 pub struct TileRef {
     pub tileset_id: TilesetId,
     pub index: u32,
+    /// 0,1,2,3 => 0/90/180/270 度顺时针。
+    #[serde(default)]
+    pub rot: u8,
+    #[serde(default)]
+    pub flip_x: bool,
+    #[serde(default)]
+    pub flip_y: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -258,6 +265,7 @@ pub struct PanState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolKind {
     Pencil,
+    Eraser,
     Rect,
     Fill,
     Select,
@@ -271,9 +279,20 @@ impl Default for ToolKind {
     }
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct ToolState {
     pub tool: ToolKind,
+    /// 通过 Ctrl+V / 右键菜单进入粘贴时，记住进入前的工具，便于粘贴落地后自动恢复。
+    pub return_after_paste: Option<ToolKind>,
+}
+
+impl Default for ToolState {
+    fn default() -> Self {
+        Self {
+            tool: ToolKind::default(),
+            return_after_paste: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -299,6 +318,72 @@ pub struct Clipboard {
     pub height: u32,
     pub tiles: Vec<Option<TileRef>>,
 }
+
+#[derive(Resource, Default, Clone, Copy)]
+pub struct PasteState {
+    /// 0,1,2,3 => 0/90/180/270 度顺时针。
+    pub rot: u8,
+    pub flip_x: bool,
+    pub flip_y: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextMenuAction {
+    Undo,
+    Redo,
+    EnterPaste,
+    SelectionCopy,
+    SelectionCut,
+    SelectionDelete,
+    SelectionSelectAll,
+    SelectionDeselect,
+
+    PasteRotateCcw,
+    PasteRotateCw,
+    PasteFlipX,
+    PasteFlipY,
+    PasteReset,
+    ExitPaste,
+}
+
+#[derive(Resource, Default)]
+pub struct ContextMenuState {
+    pub open: bool,
+    /// UI 屏幕坐标（原点左上）。
+    pub screen_pos: Vec2,
+	/// 打开菜单时鼠标所在的地图格子坐标（若不在地图上则为 None）。
+	pub map_pos: Option<UVec2>,
+    /// 用于“点击菜单项/点击空白关闭”时，避免同一帧触发画布左键操作。
+    pub consume_left_click: bool,
+    /// 用于 UI 动态重建菜单：状态签名（工具/选区/剪贴板等）变化时重建。
+    pub signature: u64,
+}
+
+#[derive(Component)]
+pub struct ContextMenuRoot;
+
+#[derive(Component)]
+pub struct ContextMenuBackdrop;
+
+#[derive(Component, Clone, Copy)]
+pub struct ContextMenuItem(pub ContextMenuAction);
+
+#[derive(Component)]
+pub struct ContextMenuDisabled;
+
+#[derive(Resource, Default)]
+pub struct ContextMenuCommand {
+    pub action: Option<ContextMenuAction>,
+}
+
+#[derive(Resource, Default)]
+pub struct PastePreview {
+    pub entities: Vec<Entity>,
+    pub dims: (u32, u32),
+}
+
+#[derive(Component)]
+pub struct PastePreviewTile;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SelectionRect {

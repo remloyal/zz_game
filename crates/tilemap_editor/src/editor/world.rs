@@ -16,11 +16,204 @@ use super::persistence::{load_map_from_file, save_map_to_file};
 use super::tileset::{merge_tilesets_from_map, rect_for_tile_index, save_tileset_library};
 use super::types::{
     CellChange, EditCommand, EditorConfig, EditorState, PanState, TileEntities, TileMapData, TileRef,
-    Clipboard, MapSizeFocus, MapSizeInput, SelectionRect, SelectionState, ShiftMapMode,
-    ShiftMapSettings, TilesetLibrary, TilesetLoading, TilesetRuntime, ToolKind, ToolState, UndoStack,
+    Clipboard, ContextMenuAction, ContextMenuCommand, ContextMenuState, MapSizeFocus, MapSizeInput, PasteState,
+    SelectionRect, SelectionState, PastePreview, PastePreviewTile, ShiftMapMode, ShiftMapSettings,
+    TilesetLibrary, TilesetLoading, TilesetRuntime, ToolKind, ToolState, UndoStack,
     WorldCamera,
 };
 use super::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX};
+
+fn apply_tile_visual(
+    runtime: &TilesetRuntime,
+    tile: &Option<TileRef>,
+    sprite: &mut Sprite,
+    tf: &mut Transform,
+    vis: &mut Visibility,
+    config: &EditorConfig,
+) {
+    match tile {
+        Some(TileRef {
+            tileset_id,
+            index,
+            rot,
+            flip_x,
+            flip_y,
+        }) => {
+            let Some(atlas) = runtime.by_id.get(tileset_id) else {
+                sprite.rect = None;
+                sprite.flip_x = false;
+                sprite.flip_y = false;
+                tf.rotation = Quat::IDENTITY;
+                *vis = Visibility::Hidden;
+                return;
+            };
+            sprite.image = atlas.texture.clone();
+            sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
+            sprite.flip_x = *flip_x;
+            sprite.flip_y = *flip_y;
+            let r = (*rot % 4) as f32;
+            tf.rotation = Quat::from_rotation_z(-r * std::f32::consts::FRAC_PI_2);
+            *vis = Visibility::Visible;
+        }
+        None => {
+            sprite.flip_x = false;
+            sprite.flip_y = false;
+            tf.rotation = Quat::IDENTITY;
+            *vis = Visibility::Hidden;
+        }
+    }
+}
+
+fn try_edit_single_map_tile<F>(
+    map_pos: Option<UVec2>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<&TileEntities>,
+    runtime: &TilesetRuntime,
+    config: &EditorConfig,
+    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    undo: &mut UndoStack,
+    editor: F,
+) -> bool
+where
+    F: FnOnce(&mut TileRef),
+{
+    let (Some(pos), Some(mut map), Some(tile_entities)) = (map_pos, map, tile_entities) else {
+        return false;
+    };
+    let idx = map.idx(pos.x, pos.y);
+    if idx >= map.tiles.len() {
+        return false;
+    }
+    let Some(mut after_tile) = map.tiles[idx].clone() else {
+        return false;
+    };
+    let before = map.tiles[idx].clone();
+    editor(&mut after_tile);
+    after_tile.rot %= 4;
+    let after = Some(after_tile.clone());
+    if before == after {
+        return false;
+    }
+    map.tiles[idx] = after.clone();
+    undo.push(EditCommand {
+        changes: vec![CellChange { idx, before, after: after.clone() }],
+    });
+
+    let entity = tile_entities.entities[idx];
+    if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
+        apply_tile_visual(runtime, &after, &mut sprite, &mut tf, &mut vis, config);
+    }
+    true
+}
+
+fn try_rotate_map_tile_ccw(
+    map_pos: Option<UVec2>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<&TileEntities>,
+    runtime: &TilesetRuntime,
+    config: &EditorConfig,
+    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    undo: &mut UndoStack,
+) -> bool {
+    try_edit_single_map_tile(
+        map_pos,
+        map,
+        tile_entities,
+        runtime,
+        config,
+        tiles_q,
+        undo,
+        |t| t.rot = (t.rot + 3) % 4,
+    )
+}
+
+fn try_rotate_map_tile_cw(
+    map_pos: Option<UVec2>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<&TileEntities>,
+    runtime: &TilesetRuntime,
+    config: &EditorConfig,
+    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    undo: &mut UndoStack,
+) -> bool {
+    try_edit_single_map_tile(
+        map_pos,
+        map,
+        tile_entities,
+        runtime,
+        config,
+        tiles_q,
+        undo,
+        |t| t.rot = (t.rot + 1) % 4,
+    )
+}
+
+fn try_flip_map_tile_x(
+    map_pos: Option<UVec2>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<&TileEntities>,
+    runtime: &TilesetRuntime,
+    config: &EditorConfig,
+    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    undo: &mut UndoStack,
+) -> bool {
+    try_edit_single_map_tile(
+        map_pos,
+        map,
+        tile_entities,
+        runtime,
+        config,
+        tiles_q,
+        undo,
+        |t| t.flip_x = !t.flip_x,
+    )
+}
+
+fn try_flip_map_tile_y(
+    map_pos: Option<UVec2>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<&TileEntities>,
+    runtime: &TilesetRuntime,
+    config: &EditorConfig,
+    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    undo: &mut UndoStack,
+) -> bool {
+    try_edit_single_map_tile(
+        map_pos,
+        map,
+        tile_entities,
+        runtime,
+        config,
+        tiles_q,
+        undo,
+        |t| t.flip_y = !t.flip_y,
+    )
+}
+
+fn try_reset_map_tile_transform(
+    map_pos: Option<UVec2>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<&TileEntities>,
+    runtime: &TilesetRuntime,
+    config: &EditorConfig,
+    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    undo: &mut UndoStack,
+) -> bool {
+    try_edit_single_map_tile(
+        map_pos,
+        map,
+        tile_entities,
+        runtime,
+        config,
+        tiles_q,
+        undo,
+        |t| {
+            t.rot = 0;
+            t.flip_x = false;
+            t.flip_y = false;
+        },
+    )
+}
 
 fn cursor_tile_pos(
     window: &Window,
@@ -75,6 +268,178 @@ fn rect_from_two(a: UVec2, b: UVec2) -> SelectionRect {
     }
 }
 
+fn paste_dims(clipboard: &Clipboard, paste: &PasteState) -> (u32, u32) {
+    let rot = paste.rot % 4;
+    if rot == 1 || rot == 3 {
+        (clipboard.height, clipboard.width)
+    } else {
+        (clipboard.width, clipboard.height)
+    }
+}
+
+fn paste_dst_xy(sx: u32, sy: u32, clipboard: &Clipboard, paste: &PasteState) -> Option<(u32, u32)> {
+    if sx >= clipboard.width || sy >= clipboard.height {
+        return None;
+    }
+
+    // 约定：先旋转（顺时针 rot），再在“旋转后坐标系”里翻转。
+    let rot = paste.rot % 4;
+    let (pw, ph) = paste_dims(clipboard, paste);
+
+    let (mut x, mut y) = match rot {
+        0 => (sx, sy),
+        // 90° CW: (x, y) -> (h-1-y, x)
+        1 => (clipboard.height - 1 - sy, sx),
+        // 180°: (x, y) -> (w-1-x, h-1-y)
+        2 => (clipboard.width - 1 - sx, clipboard.height - 1 - sy),
+        // 270° CW: (x, y) -> (y, w-1-x)
+        3 => (sy, clipboard.width - 1 - sx),
+        _ => (sx, sy),
+    };
+
+    if paste.flip_x {
+        x = pw - 1 - x;
+    }
+    if paste.flip_y {
+        y = ph - 1 - y;
+    }
+
+    if x >= pw || y >= ph {
+        return None;
+    }
+    Some((x, y))
+}
+
+fn tile_world_center(x: u32, y: u32, tile_size: UVec2, z: f32) -> Vec3 {
+    let tile_w = tile_size.x as f32;
+    let tile_h = tile_size.y as f32;
+    let world_x = (x as f32 + 0.5) * tile_w;
+    let world_y = (y as f32 + 0.5) * tile_h;
+    Vec3::new(world_x, world_y, z)
+}
+
+/// 粘贴“幽灵预览”：在鼠标下方显示将要贴的图块（半透明），旋转/翻转会立即可见。
+pub fn update_paste_preview(
+    mut commands: Commands,
+    tools: Res<ToolState>,
+    keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    config: Res<EditorConfig>,
+    runtime: Res<TilesetRuntime>,
+    clipboard: Res<Clipboard>,
+    paste: Res<PasteState>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut preview: ResMut<PastePreview>,
+    mut q: Query<(&mut Sprite, &mut Transform, &mut Visibility), With<PastePreviewTile>>,
+) {
+    // 仅在粘贴工具下显示。
+    if tools.tool != ToolKind::Paste {
+        for &e in &preview.entities {
+            if let Ok((_s, _t, mut v)) = q.get_mut(e) {
+                *v = Visibility::Hidden;
+            }
+        }
+        return;
+    }
+    if keys.pressed(KeyCode::Space) {
+        return;
+    }
+    let Some(tile_entities) = tile_entities.as_deref() else {
+        return;
+    };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok((camera, camera_transform)) = camera_q.single() else {
+        return;
+    };
+
+    if clipboard.width == 0 || clipboard.height == 0 || clipboard.tiles.is_empty() {
+        return;
+    }
+
+    let Some(pos) = cursor_tile_pos(
+        window,
+        camera,
+        camera_transform,
+        &config,
+        tile_entities.width,
+        tile_entities.height,
+    ) else {
+        for &e in &preview.entities {
+            if let Ok((_s, _t, mut v)) = q.get_mut(e) {
+                *v = Visibility::Hidden;
+            }
+        }
+        return;
+    };
+
+    let (pw, ph) = paste_dims(&clipboard, &paste);
+    let want = (pw * ph) as usize;
+
+    if preview.dims != (pw, ph) || preview.entities.len() != want {
+        for &e in &preview.entities {
+            commands.entity(e).despawn();
+        }
+        preview.entities.clear();
+        preview.dims = (pw, ph);
+
+        for _ in 0..want {
+            let e = commands
+                .spawn((
+                    Sprite {
+                        image: Handle::<Image>::default(),
+                        rect: None,
+                        color: Color::srgba(1.0, 1.0, 1.0, 0.55),
+                        ..default()
+                    },
+                    Transform::from_translation(Vec3::ZERO),
+                    Visibility::Hidden,
+                    PastePreviewTile,
+                ))
+                .id();
+            preview.entities.push(e);
+        }
+    }
+
+    // 先生成变换后的“目标局部格子”数组，再逐格写到 preview sprites。
+    let mut transformed: Vec<Option<TileRef>> = vec![None; want];
+    for sy in 0..clipboard.height {
+        for sx in 0..clipboard.width {
+            let Some((cx, cy)) = paste_dst_xy(sx, sy, &clipboard, &paste) else {
+                continue;
+            };
+            let src_idx = (sy * clipboard.width + sx) as usize;
+            let dst_idx = (cy * pw + cx) as usize;
+            if dst_idx < transformed.len() {
+                transformed[dst_idx] = clipboard.tiles.get(src_idx).cloned().unwrap_or(None);
+            }
+        }
+    }
+
+    for cy in 0..ph {
+        for cx in 0..pw {
+            let i = (cy * pw + cx) as usize;
+            let e = preview.entities[i];
+            let Ok((mut sprite, mut tf, mut vis)) = q.get_mut(e) else {
+                continue;
+            };
+
+            let dst_x = pos.x + cx;
+            let dst_y = pos.y + cy;
+            if dst_x >= tile_entities.width || dst_y >= tile_entities.height {
+                *vis = Visibility::Hidden;
+                continue;
+            }
+
+            tf.translation = tile_world_center(dst_x, dst_y, config.tile_size, 5.0);
+            apply_tile_visual(&runtime, &transformed[i], &mut sprite, &mut tf, &mut vis, &config);
+            sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.55);
+        }
+    }
+}
+
 pub fn undo_redo_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     mut undo: ResMut<UndoStack>,
@@ -82,7 +447,7 @@ pub fn undo_redo_shortcuts(
     config: Res<EditorConfig>,
     map: Option<ResMut<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
 ) {
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     if !ctrl {
@@ -235,6 +600,7 @@ pub fn draw_canvas_helpers(
 	tools: Res<ToolState>,
 	selection: Res<SelectionState>,
 	clipboard: Res<Clipboard>,
+    paste: Res<PasteState>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -355,8 +721,9 @@ pub fn draw_canvas_helpers(
             return;
         }
         let (px, py) = (px as u32, py as u32);
-        let x1 = (px as f32 + clipboard.width as f32) * tile_w;
-        let y1 = (py as f32 + clipboard.height as f32) * tile_h;
+        let (pw, ph) = paste_dims(&clipboard, &paste);
+        let x1 = (px as f32 + pw as f32) * tile_w;
+        let y1 = (py as f32 + ph as f32) * tile_h;
         let x0 = px as f32 * tile_w;
         let y0 = py as f32 * tile_h;
         let c = Color::srgba(0.2, 1.0, 0.2, 0.75);
@@ -431,7 +798,7 @@ pub fn keyboard_shortcuts(
     mut state: ResMut<EditorState>,
     mut undo: ResMut<UndoStack>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     map: Option<ResMut<TileMapData>>,
     config: Res<EditorConfig>,
 ) {
@@ -471,7 +838,7 @@ pub fn keyboard_shortcuts(
     }
 }
 
-/// 工具快捷键：1/2/3/4 切换（笔刷/矩形/填充/选择）。
+/// 工具快捷键：1/2/3/4/5/6 切换（笔刷/矩形/填充/选择/粘贴/橡皮）。
 pub fn tool_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     input: Res<MapSizeInput>,
@@ -492,6 +859,8 @@ pub fn tool_shortcuts(
         tools.tool = ToolKind::Select;
     } else if keys.just_pressed(KeyCode::Digit5) || keys.just_pressed(KeyCode::Numpad5) {
         tools.tool = ToolKind::Paste;
+	} else if keys.just_pressed(KeyCode::Digit6) || keys.just_pressed(KeyCode::Numpad6) {
+		tools.tool = ToolKind::Eraser;
     }
 }
 
@@ -528,6 +897,7 @@ pub fn eyedropper_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     tools: Res<ToolState>,
+    menu: Res<ContextMenuState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
     config: Res<EditorConfig>,
@@ -537,6 +907,9 @@ pub fn eyedropper_with_mouse(
     mut lib: ResMut<TilesetLibrary>,
 ) {
     if tools.tool != ToolKind::Eyedropper {
+        return;
+    }
+    if menu.open || menu.consume_left_click {
         return;
     }
     if keys.pressed(KeyCode::Space) {
@@ -594,7 +967,7 @@ pub fn shift_map_shortcuts(
     mut undo: ResMut<UndoStack>,
     map: Option<ResMut<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
 ) {
     // 输入框聚焦时不抢快捷键
     if input.focus != MapSizeFocus::None {
@@ -686,7 +1059,7 @@ pub fn move_selection_shortcuts(
     mut undo: ResMut<UndoStack>,
     map: Option<ResMut<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     mut selection: ResMut<SelectionState>,
 ) {
     if input.focus != MapSizeFocus::None {
@@ -794,22 +1167,8 @@ pub fn move_selection_shortcuts(
     // 局部刷新渲染
     for ch in &cmd.changes {
         let entity = tile_entities.entities[ch.idx];
-        if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
-            match &ch.after {
-                Some(TileRef { tileset_id, index }) => {
-                    let Some(atlas) = runtime.by_id.get(tileset_id) else {
-                        sprite.rect = None;
-                        *vis = Visibility::Hidden;
-                        continue;
-                    };
-                    sprite.image = atlas.texture.clone();
-                    sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
-                    *vis = Visibility::Visible;
-                }
-                None => {
-                    *vis = Visibility::Hidden;
-                }
-            }
+        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
+            apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
         }
     }
 
@@ -824,6 +1183,7 @@ pub fn select_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     tools: Res<ToolState>,
+    menu: Res<ContextMenuState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
     config: Res<EditorConfig>,
@@ -831,6 +1191,9 @@ pub fn select_with_mouse(
     mut selection: ResMut<SelectionState>,
 ) {
     if tools.tool != ToolKind::Select {
+        return;
+    }
+    if menu.open || menu.consume_left_click {
         return;
     }
     if keys.pressed(KeyCode::Space) {
@@ -894,6 +1257,7 @@ pub fn copy_paste_shortcuts(
     selection: Res<SelectionState>,
     map: Option<Res<TileMapData>>,
     mut clipboard: ResMut<Clipboard>,
+    paste: ResMut<PasteState>,
 ) {
     // 输入框聚焦时不抢快捷键
     if input.focus != MapSizeFocus::None {
@@ -902,7 +1266,9 @@ pub fn copy_paste_shortcuts(
 
     if keys.just_pressed(KeyCode::Escape) {
         if tools.tool == ToolKind::Paste {
-            tools.tool = ToolKind::Select;
+			let back = tools.return_after_paste.take().unwrap_or(ToolKind::Select);
+            tools.tool = back;
+			info!("exit paste -> back to {:?}", back);
         }
         return;
     }
@@ -935,9 +1301,451 @@ pub fn copy_paste_shortcuts(
 
     if keys.just_pressed(KeyCode::KeyV) {
         if clipboard.width == 0 || clipboard.height == 0 || clipboard.tiles.is_empty() {
+			info!("enter paste: clipboard empty -> ignored");
             return;
         }
+        if tools.tool != ToolKind::Paste {
+            tools.return_after_paste = Some(tools.tool);
+        }
         tools.tool = ToolKind::Paste;
+        info!(
+            "enter paste: clipboard {}x{} (tiles={}), keep transform rot={} flip_x={} flip_y={}",
+            clipboard.width,
+            clipboard.height,
+            clipboard.tiles.len(),
+            paste.rot % 4,
+            paste.flip_x,
+            paste.flip_y
+        );
+    }
+}
+
+/// 粘贴变换：Q/E 旋转，H/V 翻转。
+pub fn paste_transform_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    tools: Res<ToolState>,
+    clipboard: Res<Clipboard>,
+    runtime: Res<TilesetRuntime>,
+    config: Res<EditorConfig>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    mut undo: ResMut<UndoStack>,
+    mut paste: ResMut<PasteState>,
+) {
+    // 避免与 Ctrl+V（进入/重置粘贴）等快捷键冲突。
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    if ctrl {
+        return;
+    }
+
+    let action = if keys.just_pressed(KeyCode::KeyQ) {
+        Some(ContextMenuAction::PasteRotateCcw)
+    } else if keys.just_pressed(KeyCode::KeyE) {
+        Some(ContextMenuAction::PasteRotateCw)
+    } else if keys.just_pressed(KeyCode::KeyH) {
+        Some(ContextMenuAction::PasteFlipX)
+    } else if keys.just_pressed(KeyCode::KeyV) {
+        Some(ContextMenuAction::PasteFlipY)
+    } else {
+        None
+    };
+
+    let Some(action) = action else {
+        return;
+    };
+
+    // 粘贴模式：永远调整粘贴变换（预览/落地）。
+    if tools.tool == ToolKind::Paste {
+        match action {
+            ContextMenuAction::PasteRotateCcw => paste.rot = (paste.rot + 3) % 4,
+            ContextMenuAction::PasteRotateCw => paste.rot = (paste.rot + 1) % 4,
+            ContextMenuAction::PasteFlipX => paste.flip_x = !paste.flip_x,
+            ContextMenuAction::PasteFlipY => paste.flip_y = !paste.flip_y,
+            _ => {}
+        }
+        info!(
+            "paste transform changed (tool=Paste): rot={} ({}deg), flip_x={}, flip_y={}",
+            paste.rot % 4,
+            (paste.rot as u32 % 4) * 90,
+            paste.flip_x,
+            paste.flip_y
+        );
+        return;
+    }
+
+    // 非粘贴模式：优先作用于鼠标指向的“已有图块”（只要格子里有 tile）。
+    let mut did_tile = false;
+    let map_pos = (|| {
+        let Ok(window) = windows.single() else {
+            return None;
+        };
+        let Some(tile_entities) = tile_entities.as_deref() else {
+            return None;
+        };
+        let Ok((camera, camera_transform)) = camera_q.single() else {
+            return None;
+        };
+        cursor_tile_pos(
+            window,
+            camera,
+            camera_transform,
+            &config,
+            tile_entities.width,
+            tile_entities.height,
+        )
+    })();
+
+    if map_pos.is_some() {
+        did_tile = match action {
+            ContextMenuAction::PasteRotateCcw => {
+                try_rotate_map_tile_ccw(map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
+            }
+            ContextMenuAction::PasteRotateCw => {
+                try_rotate_map_tile_cw(map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
+            }
+            ContextMenuAction::PasteFlipX => {
+                try_flip_map_tile_x(map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
+            }
+            ContextMenuAction::PasteFlipY => {
+                try_flip_map_tile_y(map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo)
+            }
+            _ => false,
+        };
+    }
+
+    if did_tile {
+        info!("map tile transform changed at {:?}", map_pos);
+        return;
+    }
+
+    // 兜底：若剪贴板有内容，则改“预设粘贴变换”（允许先旋转再 Ctrl+V）。
+    if clipboard.width == 0 || clipboard.height == 0 || clipboard.tiles.is_empty() {
+        return;
+    }
+
+    match action {
+        ContextMenuAction::PasteRotateCcw => paste.rot = (paste.rot + 3) % 4,
+        ContextMenuAction::PasteRotateCw => paste.rot = (paste.rot + 1) % 4,
+        ContextMenuAction::PasteFlipX => paste.flip_x = !paste.flip_x,
+        ContextMenuAction::PasteFlipY => paste.flip_y = !paste.flip_y,
+        _ => {}
+    }
+    info!(
+        "paste preset transform changed (tool={:?}): rot={} ({}deg), flip_x={}, flip_y={}",
+        tools.tool,
+        paste.rot % 4,
+        (paste.rot as u32 % 4) * 90,
+        paste.flip_x,
+        paste.flip_y
+    );
+}
+
+/// 右键菜单：先支持粘贴模式的变换控制（后续可扩展到其他工具）。
+pub fn context_menu_open_close(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    tools: Res<ToolState>,
+    _clipboard: Res<Clipboard>,
+    config: Res<EditorConfig>,
+    tile_entities: Option<Res<TileEntities>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    mut menu: ResMut<ContextMenuState>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+
+    if keys.just_pressed(KeyCode::Escape) {
+        if menu.open {
+            menu.open = false;
+            menu.consume_left_click = true;
+        }
+        return;
+    }
+
+    if buttons.just_pressed(MouseButton::Right) {
+        let Some(pos) = window.cursor_position() else {
+            return;
+        };
+        // 只在画布区域打开（避免左侧/顶栏误触）
+        if pos.x <= LEFT_PANEL_WIDTH_PX {
+            return;
+        }
+        if pos.y <= RIGHT_TOPBAR_HEIGHT_PX {
+            return;
+        }
+        menu.open = true;
+        menu.signature = 0;
+        menu.consume_left_click = false;
+        menu.screen_pos = pos;
+        menu.map_pos = None;
+        if let Some(tile_entities) = tile_entities.as_deref() {
+            if let Ok((camera, camera_transform)) = camera_q.single() {
+                menu.map_pos = cursor_tile_pos(
+                    window,
+                    camera,
+                    camera_transform,
+                    &config,
+                    tile_entities.width,
+                    tile_entities.height,
+                );
+            }
+        }
+        info!("context menu open at screen ({:.1}, {:.1}) tool={:?}", pos.x, pos.y, tools.tool);
+    }
+
+    // “点空白关闭”交给 UI 侧的 ContextMenuBackdrop 处理，避免 world 侧做不精确的 bounds 判断。
+}
+
+fn copy_selection_to_clipboard(rect: SelectionRect, map: &TileMapData, clipboard: &mut Clipboard) {
+    let w = rect.width();
+    let h = rect.height();
+    let mut tiles = Vec::with_capacity((w * h) as usize);
+    for y in rect.min.y..=rect.max.y {
+        for x in rect.min.x..=rect.max.x {
+            let idx = map.idx(x, y);
+            tiles.push(map.tiles[idx].clone());
+        }
+    }
+    clipboard.width = w;
+    clipboard.height = h;
+    clipboard.tiles = tiles;
+}
+
+fn clear_selection_to_none(
+    rect: SelectionRect,
+    map: &mut TileMapData,
+    runtime: &TilesetRuntime,
+    config: &EditorConfig,
+    tile_entities: &TileEntities,
+    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    undo: &mut UndoStack,
+) {
+    let mut cmd = EditCommand::default();
+    for y in rect.min.y..=rect.max.y {
+        for x in rect.min.x..=rect.max.x {
+            let idx = map.idx(x, y);
+            if map.tiles[idx].is_none() {
+                continue;
+            }
+            let before = map.tiles[idx].clone();
+            let after = None;
+            map.tiles[idx] = None;
+            cmd.changes.push(CellChange { idx, before, after });
+        }
+    }
+    if cmd.changes.is_empty() {
+        return;
+    }
+    for ch in &cmd.changes {
+        let entity = tile_entities.entities[ch.idx];
+		if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
+			apply_tile_visual(runtime, &ch.after, &mut sprite, &mut tf, &mut vis, config);
+		}
+    }
+    undo.push(cmd);
+}
+
+pub fn apply_context_menu_command(
+    mut cmd: ResMut<ContextMenuCommand>,
+    mut tools: ResMut<ToolState>,
+    mut paste: ResMut<PasteState>,
+    mut selection: ResMut<SelectionState>,
+    mut clipboard: ResMut<Clipboard>,
+    menu: Res<ContextMenuState>,
+    runtime: Res<TilesetRuntime>,
+    config: Res<EditorConfig>,
+    map: Option<ResMut<TileMapData>>,
+    tile_entities: Option<Res<TileEntities>>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    mut undo: ResMut<UndoStack>,
+) {
+    let Some(action) = cmd.action.take() else {
+        return;
+    };
+
+    match action {
+        ContextMenuAction::Undo => {
+            let Some(mut map) = map else { return; };
+            let Some(tile_entities) = tile_entities.as_deref() else { return; };
+
+            let Some(cmd) = undo.undo.pop() else {
+                return;
+            };
+            for ch in &cmd.changes {
+                if ch.idx < map.tiles.len() {
+                    map.tiles[ch.idx] = ch.before.clone();
+                }
+            }
+            undo.redo.push(cmd);
+            apply_map_to_entities(&runtime, &map, tile_entities, &mut tiles_q, &config);
+            info!("context cmd: undo");
+        }
+        ContextMenuAction::Redo => {
+            let Some(mut map) = map else { return; };
+            let Some(tile_entities) = tile_entities.as_deref() else { return; };
+
+            let Some(cmd) = undo.redo.pop() else {
+                return;
+            };
+            for ch in &cmd.changes {
+                if ch.idx < map.tiles.len() {
+                    map.tiles[ch.idx] = ch.after.clone();
+                }
+            }
+            undo.undo.push(cmd);
+            apply_map_to_entities(&runtime, &map, tile_entities, &mut tiles_q, &config);
+            info!("context cmd: redo");
+        }
+        ContextMenuAction::EnterPaste => {
+            if clipboard.width > 0 && clipboard.height > 0 && !clipboard.tiles.is_empty() {
+				if tools.tool != ToolKind::Paste {
+					tools.return_after_paste = Some(tools.tool);
+				}
+                tools.tool = ToolKind::Paste;
+                info!(
+                    "context cmd: enter paste (keep transform rot={} flip_x={} flip_y={})",
+                    paste.rot % 4,
+                    paste.flip_x,
+                    paste.flip_y
+                );
+            } else {
+                info!("context cmd: enter paste ignored (clipboard empty)");
+            }
+        }
+        ContextMenuAction::SelectionCopy => {
+            let Some(map) = map.as_deref() else { return; };
+            let Some(rect) = selection.rect else { return; };
+            copy_selection_to_clipboard(rect, map, &mut clipboard);
+            tools.tool = ToolKind::Select;
+            info!("context cmd: selection copy {}x{}", clipboard.width, clipboard.height);
+        }
+        ContextMenuAction::SelectionCut => {
+            let Some(mut map) = map else { return; };
+            let Some(tile_entities) = tile_entities.as_deref() else { return; };
+            let Some(rect) = selection.rect else { return; };
+            copy_selection_to_clipboard(rect, &map, &mut clipboard);
+            clear_selection_to_none(rect, &mut map, &runtime, &config, tile_entities, &mut tiles_q, &mut undo);
+            tools.tool = ToolKind::Select;
+            info!("context cmd: selection cut {}x{}", clipboard.width, clipboard.height);
+        }
+        ContextMenuAction::SelectionDelete => {
+            let Some(mut map) = map else { return; };
+            let Some(tile_entities) = tile_entities.as_deref() else { return; };
+            let Some(rect) = selection.rect else { return; };
+            clear_selection_to_none(rect, &mut map, &runtime, &config, tile_entities, &mut tiles_q, &mut undo);
+            tools.tool = ToolKind::Select;
+            info!("context cmd: selection delete");
+        }
+        ContextMenuAction::SelectionSelectAll => {
+            let Some(map) = map.as_deref() else { return; };
+            if map.width == 0 || map.height == 0 { return; }
+            let rect = SelectionRect { min: UVec2::ZERO, max: UVec2::new(map.width - 1, map.height - 1) };
+            selection.dragging = false;
+            selection.start = rect.min;
+            selection.current = rect.max;
+            selection.rect = Some(rect);
+            tools.tool = ToolKind::Select;
+            info!("context cmd: select all");
+        }
+        ContextMenuAction::SelectionDeselect => {
+            selection.dragging = false;
+            selection.rect = None;
+            tools.tool = ToolKind::Select;
+            info!("context cmd: deselect");
+        }
+        ContextMenuAction::PasteRotateCcw => {
+            // 粘贴模式下：调整粘贴预览/落地变换；非粘贴模式：若右键指向某个已有图块，则旋转该图块。
+            if tools.tool == ToolKind::Paste {
+                paste.rot = (paste.rot + 3) % 4;
+                info!("context cmd: rotate ccw (paste) -> rot={}", paste.rot % 4);
+                return;
+            }
+            if try_rotate_map_tile_ccw(menu.map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo) {
+                info!("context cmd: rotate ccw (tile)");
+                return;
+            }
+            if clipboard.width > 0 && clipboard.height > 0 && !clipboard.tiles.is_empty() {
+                paste.rot = (paste.rot + 3) % 4;
+                info!("context cmd: rotate ccw (preset) -> rot={}", paste.rot % 4);
+            }
+        }
+        ContextMenuAction::PasteRotateCw => {
+            if tools.tool == ToolKind::Paste {
+                paste.rot = (paste.rot + 1) % 4;
+                info!("context cmd: rotate cw (paste) -> rot={}", paste.rot % 4);
+                return;
+            }
+            if try_rotate_map_tile_cw(menu.map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo) {
+                info!("context cmd: rotate cw (tile)");
+                return;
+            }
+            if clipboard.width > 0 && clipboard.height > 0 && !clipboard.tiles.is_empty() {
+                paste.rot = (paste.rot + 1) % 4;
+                info!("context cmd: rotate cw (preset) -> rot={}", paste.rot % 4);
+            }
+        }
+        ContextMenuAction::PasteFlipX => {
+            if tools.tool == ToolKind::Paste {
+                paste.flip_x = !paste.flip_x;
+                info!("context cmd: flip x (paste) -> {}", paste.flip_x);
+                return;
+            }
+            if try_flip_map_tile_x(menu.map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo) {
+                info!("context cmd: flip x (tile)");
+                return;
+            }
+            if clipboard.width > 0 && clipboard.height > 0 && !clipboard.tiles.is_empty() {
+                paste.flip_x = !paste.flip_x;
+                info!("context cmd: flip x (preset) -> {}", paste.flip_x);
+            }
+        }
+        ContextMenuAction::PasteFlipY => {
+            if tools.tool == ToolKind::Paste {
+                paste.flip_y = !paste.flip_y;
+                info!("context cmd: flip y (paste) -> {}", paste.flip_y);
+                return;
+            }
+            if try_flip_map_tile_y(menu.map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo) {
+                info!("context cmd: flip y (tile)");
+                return;
+            }
+            if clipboard.width > 0 && clipboard.height > 0 && !clipboard.tiles.is_empty() {
+                paste.flip_y = !paste.flip_y;
+                info!("context cmd: flip y (preset) -> {}", paste.flip_y);
+            }
+        }
+        ContextMenuAction::PasteReset => {
+            if tools.tool == ToolKind::Paste {
+                *paste = PasteState::default();
+                info!("context cmd: paste reset");
+                return;
+            }
+            if try_reset_map_tile_transform(menu.map_pos, map, tile_entities.as_deref(), &runtime, &config, &mut tiles_q, &mut undo) {
+                info!("context cmd: tile transform reset");
+                return;
+            }
+            *paste = PasteState::default();
+            info!("context cmd: preset transform reset");
+        }
+        ContextMenuAction::ExitPaste => {
+            let back = tools.return_after_paste.take().unwrap_or(ToolKind::Select);
+            tools.tool = back;
+            info!("context cmd: exit paste -> back to {:?}", back);
+        }
+    }
+}
+
+pub fn context_menu_clear_consumption(
+    buttons: Res<ButtonInput<MouseButton>>,
+    mut menu: ResMut<ContextMenuState>,
+) {
+    if menu.consume_left_click && !buttons.pressed(MouseButton::Left) {
+        menu.consume_left_click = false;
     }
 }
 
@@ -951,7 +1759,7 @@ pub fn selection_cut_delete_shortcuts(
     selection: Res<SelectionState>,
     map: Option<ResMut<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     mut clipboard: ResMut<Clipboard>,
     mut undo: ResMut<UndoStack>,
 ) {
@@ -1017,23 +1825,9 @@ pub fn selection_cut_delete_shortcuts(
 
     for ch in &cmd.changes {
         let entity = tile_entities.entities[ch.idx];
-        if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
-            match &ch.after {
-                Some(TileRef { tileset_id, index }) => {
-                    let Some(atlas) = runtime.by_id.get(tileset_id) else {
-                        sprite.rect = None;
-                        *vis = Visibility::Hidden;
-                        continue;
-                    };
-                    sprite.image = atlas.texture.clone();
-                    sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
-                    *vis = Visibility::Visible;
-                }
-                None => {
-                    *vis = Visibility::Hidden;
-                }
-            }
-        }
+		if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
+			apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
+		}
     }
 
     undo.push(cmd);
@@ -1088,18 +1882,23 @@ pub fn selection_selectall_cancel_shortcuts(
 pub fn paste_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    tools: Res<ToolState>,
+    mut tools: ResMut<ToolState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
     config: Res<EditorConfig>,
     runtime: Res<TilesetRuntime>,
     clipboard: Res<Clipboard>,
+    paste: Res<PasteState>,
+    menu: Res<ContextMenuState>,
     map: Option<ResMut<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     mut undo: ResMut<UndoStack>,
 ) {
     if tools.tool != ToolKind::Paste {
+        return;
+    }
+    if menu.open || menu.consume_left_click {
         return;
     }
     if keys.pressed(KeyCode::Space) {
@@ -1135,19 +1934,70 @@ pub fn paste_with_mouse(
         return;
     };
 
+    info!(
+        "paste click at map ({}, {}): clipboard {}x{} tiles={} | rot={} flip_x={} flip_y={}",
+        pos.x,
+        pos.y,
+        clipboard.width,
+        clipboard.height,
+        clipboard.tiles.len(),
+        paste.rot % 4,
+        paste.flip_x,
+        paste.flip_y
+    );
+
     let mut cmd = EditCommand::default();
-    for cy in 0..clipboard.height {
-        for cx in 0..clipboard.width {
+    let (pw, ph) = paste_dims(&clipboard, &paste);
+    let mut attempted = 0u32;
+    let mut oob = 0u32;
+    let mut same = 0u32;
+    let mut sampled = 0u32;
+
+    // 遍历源剪贴板 → 映射到变换后的目标坐标（这样旋转/翻转更直观且不易写错）。
+    for sy in 0..clipboard.height {
+        for sx in 0..clipboard.width {
+            let Some((cx, cy)) = paste_dst_xy(sx, sy, &clipboard, &paste) else {
+                continue;
+            };
+            debug_assert!(cx < pw && cy < ph);
+			attempted += 1;
+
             let dst_x = pos.x + cx;
             let dst_y = pos.y + cy;
             if dst_x >= tile_entities.width || dst_y >= tile_entities.height {
+				oob += 1;
                 continue;
             }
-            let src_idx = (cy * clipboard.width + cx) as usize;
+
+            let src_idx = (sy * clipboard.width + sx) as usize;
             let after = clipboard.tiles.get(src_idx).cloned().unwrap_or(None);
             let dst_idx = map.idx(dst_x, dst_y);
             if map.tiles[dst_idx] == after {
+                same += 1;
                 continue;
+            }
+
+            if sampled < 8 {
+                sampled += 1;
+                let after_label = match &after {
+                    Some(t) => format!("{}:{}", t.tileset_id, t.index),
+                    None => "None".to_string(),
+                };
+                let before_label = match &map.tiles[dst_idx] {
+                    Some(t) => format!("{}:{}", t.tileset_id, t.index),
+                    None => "None".to_string(),
+                };
+                info!(
+                    "paste sample: src({},{}) -> local({},{}) -> dst({},{}) before={} after={}",
+                    sx,
+                    sy,
+                    cx,
+                    cy,
+                    dst_x,
+                    dst_y,
+                    before_label,
+                    after_label
+                );
             }
             let before = map.tiles[dst_idx].clone();
             map.tiles[dst_idx] = after.clone();
@@ -1156,32 +2006,49 @@ pub fn paste_with_mouse(
     }
 
     if cmd.changes.is_empty() {
+        info!(
+            "paste result: no changes (attempted={}, oob={}, same={}) pw={} ph={}",
+            attempted,
+            oob,
+            same,
+            pw,
+            ph
+        );
         return;
     }
 
+    info!(
+        "paste result: changes={} (attempted={}, oob={}, same={}) pw={} ph={}",
+        cmd.changes.len(),
+        attempted,
+        oob,
+        same,
+        pw,
+        ph
+    );
+
     // 局部刷新渲染
+	let mut missing_atlas = 0u32;
     for ch in &cmd.changes {
         let entity = tile_entities.entities[ch.idx];
-        if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
-            match &ch.after {
-                Some(TileRef { tileset_id, index }) => {
-                    let Some(atlas) = runtime.by_id.get(tileset_id) else {
-                        sprite.rect = None;
-                        *vis = Visibility::Hidden;
-                        continue;
-                    };
-                    sprite.image = atlas.texture.clone();
-                    sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
-                    *vis = Visibility::Visible;
-                }
-                None => {
-                    *vis = Visibility::Hidden;
-                }
-            }
-        }
+		if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
+			if let Some(TileRef { tileset_id, .. }) = &ch.after {
+				if runtime.by_id.get(tileset_id).is_none() {
+					missing_atlas += 1;
+				}
+			}
+			apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
+		}
     }
+	if missing_atlas > 0 {
+		warn!("paste sprite refresh: missing atlas for {} cells", missing_atlas);
+	}
 
     undo.push(cmd);
+
+	// 贴完后回到进入粘贴前的工具，让流程更连贯。
+	let back = tools.return_after_paste.take().unwrap_or(ToolKind::Select);
+	tools.tool = back;
 }
 
 /// 保存/读取快捷键：S / L。
@@ -1194,7 +2061,7 @@ pub fn save_load_shortcuts(
     mut tileset_loading: ResMut<TilesetLoading>,
     runtime: Res<TilesetRuntime>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     map: Option<ResMut<TileMapData>>,
 	mut undo: ResMut<UndoStack>,
 ) {
@@ -1258,7 +2125,7 @@ pub fn refresh_map_on_tileset_runtime_change(
     config: Res<EditorConfig>,
     map: Option<Res<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
 ) {
     if !runtime.is_changed() {
         return;
@@ -1276,7 +2143,7 @@ pub fn apply_map_to_entities(
     runtime: &TilesetRuntime,
     map: &TileMapData,
     tile_entities: &TileEntities,
-    tiles_q: &mut Query<(&mut Sprite, &mut Visibility)>,
+    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     config: &EditorConfig,
 ) {
     for y in 0..map.height {
@@ -1284,34 +2151,21 @@ pub fn apply_map_to_entities(
             let idx = map.idx(x, y);
             let entity = tile_entities.entities[idx];
 
-            let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) else {
+            let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) else {
                 continue;
             };
 
-            match map.tiles[idx] {
-                Some(TileRef { ref tileset_id, index }) => {
-					let Some(atlas) = runtime.by_id.get(tileset_id) else {
-						sprite.rect = None;
-						*vis = Visibility::Hidden;
-						continue;
-					};
-					sprite.image = atlas.texture.clone();
-					sprite.rect = Some(rect_for_tile_index(index, atlas.columns, config.tile_size));
-					*vis = Visibility::Visible;
-				}
-                None => {
-                    *vis = Visibility::Hidden;
-                }
-            }
+			apply_tile_visual(runtime, &map.tiles[idx], &mut sprite, &mut tf, &mut vis, config);
         }
     }
 }
 
-/// 鼠标绘制：左键绘制所选 tile，右键擦除。
+/// 鼠标绘制：左键绘制/擦除（右键保留给右键菜单）。
 pub fn paint_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
 	tools: Res<ToolState>,
+	menu: Res<ContextMenuState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
     config: Res<EditorConfig>,
@@ -1320,21 +2174,29 @@ pub fn paint_with_mouse(
     runtime: Res<TilesetRuntime>,
     map: Option<ResMut<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
 	mut undo: ResMut<UndoStack>,
 	mut stroke: Local<StrokeState>,
 ) {
-	if tools.tool != ToolKind::Pencil {
+    if tools.tool != ToolKind::Pencil && tools.tool != ToolKind::Eraser {
 		return;
 	}
+    if menu.open || menu.consume_left_click {
+        return;
+    }
 
     // Space 用于平移（Space + 左键拖拽），避免与绘制冲突。
     if keys.pressed(KeyCode::Space) {
         return;
     }
 
-    let Some(active_id) = lib.active_id.clone() else {
-        return;
+    let active_id = if tools.tool == ToolKind::Pencil {
+        let Some(active_id) = lib.active_id.clone() else {
+            return;
+        };
+        Some(active_id)
+    } else {
+        None
     };
     let Some(mut map) = map else {
         return;
@@ -1344,19 +2206,12 @@ pub fn paint_with_mouse(
     };
 
     let left_down = buttons.pressed(MouseButton::Left);
-    let right_down = buttons.pressed(MouseButton::Right);
     let left_start = buttons.just_pressed(MouseButton::Left);
-    let right_start = buttons.just_pressed(MouseButton::Right);
     let left_end = buttons.just_released(MouseButton::Left);
-    let right_end = buttons.just_released(MouseButton::Right);
 
     // stroke 结束：提交为一个 undo 命令
     if stroke.active {
-        let ended = match stroke.button {
-            MouseButton::Left => left_end || !left_down,
-            MouseButton::Right => right_end || !right_down,
-            _ => true,
-        };
+        let ended = left_end || !left_down;
         if ended {
             let cmd = stroke.take_command();
             undo.push(cmd);
@@ -1385,8 +2240,6 @@ pub fn paint_with_mouse(
 		if pos.is_some() {
 			if left_start {
 				stroke.begin(MouseButton::Left);
-			} else if right_start {
-				stroke.begin(MouseButton::Right);
 			}
 		}
     }
@@ -1400,22 +2253,20 @@ pub fn paint_with_mouse(
     let entity = tile_entities.entities[idx];
 
     // 没有在绘制中
-    if !(left_down || right_down) {
+    if !left_down {
         return;
     }
 
-    let want_paint = left_down;
-    let want_erase = right_down;
-
-    let desired: Option<TileRef> = if want_paint {
-        Some(TileRef {
-            tileset_id: active_id.clone(),
-            index: state.selected_tile,
-        })
-    } else if want_erase {
+    let desired: Option<TileRef> = if tools.tool == ToolKind::Eraser {
         None
     } else {
-        return;
+        Some(TileRef {
+            tileset_id: active_id.clone().unwrap(),
+            index: state.selected_tile,
+			rot: 0,
+			flip_x: false,
+			flip_y: false,
+        })
     };
 
     if map.tiles[idx] == desired {
@@ -1428,22 +2279,8 @@ pub fn paint_with_mouse(
     stroke.record_change(idx, before.clone(), desired.clone());
 
     // 局部刷新渲染（单格），避免每帧全量 apply
-    if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
-        match desired {
-            Some(TileRef { ref tileset_id, index }) => {
-                let Some(atlas) = runtime.by_id.get(tileset_id) else {
-                    sprite.rect = None;
-                    *vis = Visibility::Hidden;
-                    return;
-                };
-                sprite.image = atlas.texture.clone();
-                sprite.rect = Some(rect_for_tile_index(index, atlas.columns, config.tile_size));
-                *vis = Visibility::Visible;
-            }
-            None => {
-                *vis = Visibility::Hidden;
-            }
-        }
+    if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
+        apply_tile_visual(&runtime, &desired, &mut sprite, &mut tf, &mut vis, &config);
     }
 }
 
@@ -1471,6 +2308,7 @@ pub fn rect_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     tools: Res<ToolState>,
+    menu: Res<ContextMenuState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
     config: Res<EditorConfig>,
@@ -1479,7 +2317,7 @@ pub fn rect_with_mouse(
     runtime: Res<TilesetRuntime>,
     map: Option<ResMut<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     mut undo: ResMut<UndoStack>,
     mut drag: Local<RectDragState>,
 ) {
@@ -1487,6 +2325,10 @@ pub fn rect_with_mouse(
         drag.active = false;
         return;
     }
+	if menu.open || menu.consume_left_click {
+		drag.active = false;
+		return;
+	}
 
     // Space 用于平移（Space + 左键拖拽），避免与绘制冲突。
     if keys.pressed(KeyCode::Space) {
@@ -1508,11 +2350,8 @@ pub fn rect_with_mouse(
     };
 
     let left_start = buttons.just_pressed(MouseButton::Left);
-    let right_start = buttons.just_pressed(MouseButton::Right);
     let left_down = buttons.pressed(MouseButton::Left);
-    let right_down = buttons.pressed(MouseButton::Right);
     let left_end = buttons.just_released(MouseButton::Left);
-    let right_end = buttons.just_released(MouseButton::Right);
 
     let pos = cursor_tile_pos(
         window,
@@ -1523,7 +2362,7 @@ pub fn rect_with_mouse(
         tile_entities.height,
     );
 
-    // 开始拖拽（左键填充 / 右键擦除）
+    // 开始拖拽（左键填充；右键保留给菜单）
     if !drag.active {
         let Some(pos) = pos else {
             return;
@@ -1531,11 +2370,6 @@ pub fn rect_with_mouse(
         if left_start {
             drag.active = true;
             drag.button = MouseButton::Left;
-            drag.start = pos;
-            drag.current = pos;
-        } else if right_start {
-            drag.active = true;
-            drag.button = MouseButton::Right;
             drag.start = pos;
             drag.current = pos;
         }
@@ -1547,9 +2381,7 @@ pub fn rect_with_mouse(
 
     // 更新当前点（仅当鼠标仍在画布内）
     if let Some(pos) = pos {
-        if (drag.button == MouseButton::Left && left_down)
-            || (drag.button == MouseButton::Right && right_down)
-        {
+        if drag.button == MouseButton::Left && left_down {
             drag.current = pos;
         }
     }
@@ -1573,28 +2405,26 @@ pub fn rect_with_mouse(
     gizmos.line_2d(Vec2::new(x0, y1), Vec2::new(x0, y0), preview_color);
 
     // 结束拖拽：提交命令
-    let ended = match drag.button {
-        MouseButton::Left => left_end || !left_down,
-        MouseButton::Right => right_end || !right_down,
-        _ => true,
-    };
+    let ended = left_end || !left_down;
     if !ended {
         return;
     }
 
-    let desired: Option<TileRef> = match drag.button {
-        MouseButton::Left => {
-            let Some(active_id) = lib.active_id.clone() else {
-                drag.active = false;
-                return;
-            };
-            Some(TileRef {
-                tileset_id: active_id,
-                index: state.selected_tile,
-            })
-        }
-        MouseButton::Right => None,
-        _ => None,
+	let erase = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let desired: Option<TileRef> = if erase {
+        None
+    } else {
+        let Some(active_id) = lib.active_id.clone() else {
+            drag.active = false;
+            return;
+        };
+        Some(TileRef {
+            tileset_id: active_id,
+            index: state.selected_tile,
+            rot: 0,
+            flip_x: false,
+            flip_y: false,
+        })
     };
 
     let mut changes: Vec<CellChange> = Vec::new();
@@ -1618,23 +2448,8 @@ pub fn rect_with_mouse(
 
             // 局部刷新渲染
             let entity = tile_entities.entities[idx];
-            if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
-                match desired {
-                    Some(TileRef { ref tileset_id, index }) => {
-                        let Some(atlas) = runtime.by_id.get(tileset_id) else {
-                            sprite.rect = None;
-                            *vis = Visibility::Hidden;
-                            continue;
-                        };
-                        sprite.image = atlas.texture.clone();
-                        sprite.rect =
-                            Some(rect_for_tile_index(index, atlas.columns, config.tile_size));
-                        *vis = Visibility::Visible;
-                    }
-                    None => {
-                        *vis = Visibility::Hidden;
-                    }
-                }
+            if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
+                apply_tile_visual(&runtime, &desired, &mut sprite, &mut tf, &mut vis, &config);
             }
         }
     }
@@ -1646,11 +2461,12 @@ pub fn rect_with_mouse(
 /// 油漆桶（Flood Fill）：点击格子后，按 4 邻接填充“同类 tile”的连通区域。
 ///
 /// - 左键：填充为当前选择的 tile
-/// - 右键：擦除（填充为 None）
+/// - 右键：保留给右键菜单
 pub fn fill_with_mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     tools: Res<ToolState>,
+    menu: Res<ContextMenuState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
     config: Res<EditorConfig>,
@@ -1659,12 +2475,15 @@ pub fn fill_with_mouse(
     runtime: Res<TilesetRuntime>,
     map: Option<ResMut<TileMapData>>,
     tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Visibility)>,
+    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     mut undo: ResMut<UndoStack>,
 ) {
     if tools.tool != ToolKind::Fill {
         return;
     }
+	if menu.open || menu.consume_left_click {
+		return;
+	}
 
     // Space 用于平移（Space + 左键拖拽），避免与点击填充冲突。
     if keys.pressed(KeyCode::Space) {
@@ -1679,8 +2498,7 @@ pub fn fill_with_mouse(
     };
 
     let left_start = buttons.just_pressed(MouseButton::Left);
-    let right_start = buttons.just_pressed(MouseButton::Right);
-    if !(left_start || right_start) {
+    if !left_start {
         return;
     }
 
@@ -1702,16 +2520,20 @@ pub fn fill_with_mouse(
         return;
     };
 
-    let desired: Option<TileRef> = if left_start {
+    let erase = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let desired: Option<TileRef> = if erase {
+        None
+    } else {
         let Some(active_id) = lib.active_id.clone() else {
             return;
         };
         Some(TileRef {
             tileset_id: active_id,
             index: state.selected_tile,
+            rot: 0,
+            flip_x: false,
+            flip_y: false,
         })
-    } else {
-        None
     };
 
     let start_idx = map.idx(pos.x, pos.y);
@@ -1768,22 +2590,8 @@ pub fn fill_with_mouse(
     // 局部刷新渲染（只刷改动格子）
     for ch in &cmd.changes {
         let entity = tile_entities.entities[ch.idx];
-        if let Ok((mut sprite, mut vis)) = tiles_q.get_mut(entity) {
-            match &ch.after {
-                Some(TileRef { tileset_id, index }) => {
-                    let Some(atlas) = runtime.by_id.get(tileset_id) else {
-                        sprite.rect = None;
-                        *vis = Visibility::Hidden;
-                        continue;
-                    };
-                    sprite.image = atlas.texture.clone();
-                    sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
-                    *vis = Visibility::Visible;
-                }
-                None => {
-                    *vis = Visibility::Hidden;
-                }
-            }
+        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
+			apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
         }
     }
 

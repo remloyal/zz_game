@@ -24,7 +24,8 @@ use tileset::{
 };
 use types::{
     EditorConfig, EditorState, MapSizeInput, PanState, TilesetLibrary, TilesetLoading, TilesetRuntime,
-    Clipboard, SelectionState, ShiftMapSettings, ToolState, UiState, UndoStack,
+    Clipboard, ContextMenuCommand, ContextMenuState, PastePreview, PasteState, SelectionState,
+    ShiftMapSettings, ToolState, UiState, UndoStack,
 };
 use ui::{
     action_button_click, apply_custom_map_size, build_palette_when_ready, map_size_text_input,
@@ -35,6 +36,8 @@ use ui::{
     shift_mode_button_click, sync_tool_button_styles, tool_button_click, update_shift_mode_label,
     update_hud_text, update_map_size_field_text, update_tileset_active_label,
     update_tileset_category_label,
+    context_menu_backdrop_click, context_menu_item_click, context_menu_item_styles, context_menu_sync,
+    context_menu_rebuild,
 };
 use world::{
     camera_pan, camera_zoom, draw_canvas_helpers, keyboard_shortcuts, paint_with_mouse,
@@ -43,6 +46,10 @@ use world::{
     eyedropper_hold_shortcut, eyedropper_with_mouse, move_selection_shortcuts, setup_world,
 	selection_cut_delete_shortcuts, shift_map_shortcuts, tool_shortcuts, undo_redo_shortcuts,
     selection_selectall_cancel_shortcuts,
+    paste_transform_shortcuts,
+	context_menu_clear_consumption, context_menu_open_close,
+	update_paste_preview,
+    apply_context_menu_command,
 };
 
 /// UI 相关常量
@@ -91,6 +98,10 @@ pub fn run() {
         .init_resource::<UiState>()
         .init_resource::<ToolState>()
         .init_resource::<Clipboard>()
+        .init_resource::<ContextMenuState>()
+        .init_resource::<ContextMenuCommand>()
+		.init_resource::<PasteState>()
+        .init_resource::<PastePreview>()
 		.init_resource::<SelectionState>()
 		.init_resource::<ShiftMapSettings>()
         .init_resource::<UndoStack>()
@@ -107,23 +118,34 @@ pub fn run() {
         .add_systems(
             Update,
             (
-                apply_ui_font_to_all_text,
-                progress_spritesheet_loading,
-                open_spritesheet_shortcut,
-                update_tileset_active_label,
-                update_tileset_category_label,
-                tileset_category_cycle_click,
-                tileset_toggle_button_click,
-                tileset_menu_visibility,
-                rebuild_tileset_menu_when_needed,
-                tileset_menu_item_click,
-                build_palette_when_ready,
-                palette_tile_click,
-                palette_scroll_wheel,
-                tool_button_click,
-                sync_tool_button_styles,
-				shift_mode_button_click,
-				update_shift_mode_label,
+                (
+                    apply_ui_font_to_all_text,
+                    progress_spritesheet_loading,
+                    open_spritesheet_shortcut,
+                    update_tileset_active_label,
+                    update_tileset_category_label,
+                    tileset_category_cycle_click,
+                    tileset_toggle_button_click,
+                    tileset_menu_visibility,
+                    rebuild_tileset_menu_when_needed,
+                    tileset_menu_item_click,
+                    build_palette_when_ready,
+                    palette_tile_click,
+                    palette_scroll_wheel,
+                    tool_button_click,
+                    sync_tool_button_styles,
+					shift_mode_button_click,
+					update_shift_mode_label,
+                )
+                    .chain(),
+                (
+					context_menu_sync,
+                    context_menu_rebuild,
+					context_menu_item_styles,
+                    context_menu_backdrop_click,
+					context_menu_item_click,
+                )
+                    .chain(),
             )
                 .chain(),
         )
@@ -145,6 +167,10 @@ pub fn run() {
                 tool_shortcuts,
                 eyedropper_hold_shortcut,
                 copy_paste_shortcuts,
+                paste_transform_shortcuts,
+				context_menu_open_close,
+				context_menu_clear_consumption,
+				apply_context_menu_command,
                 shift_map_shortcuts,
                 move_selection_shortcuts,
                 selection_cut_delete_shortcuts,
@@ -161,6 +187,7 @@ pub fn run() {
                 camera_zoom,
                 camera_pan,
                 draw_canvas_helpers,
+                update_paste_preview,
                 eyedropper_with_mouse,
                 paint_with_mouse,
 				rect_with_mouse,
