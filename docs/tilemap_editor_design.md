@@ -1,5 +1,8 @@
 # Tilemap Editor 设计（参考 RPG Maker MV/MZ）
 
+相关文档：
+- 操作手册：[docs/tilemap_editor_controls.md](docs/tilemap_editor_controls.md)
+
 本文目标：
 - 对照 RPG Maker MV/MZ 的地图编辑器，梳理当前编辑器缺失的“基础能力”。
 - 给出分阶段（P0/P1/P2）的功能路线图。
