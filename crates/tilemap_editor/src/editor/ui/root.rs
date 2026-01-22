@@ -1,0 +1,718 @@
+//! UI 根节点与静态 UI 树构建。
+
+use bevy::prelude::*;
+
+use crate::editor::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX, UI_BUTTON, UI_PANEL};
+use crate::editor::types::{
+	ActionButton, ActionKind, CanvasRoot, HudText,
+	MapSizeApplyButton, MapSizeHeightField, MapSizeHeightText, MapSizeWidthField, MapSizeWidthText,
+	PaletteRoot, PaletteScroll,
+	ShiftModeButton, ShiftModeLabel,
+	TilesetBar, TilesetCategoryCycleButton, TilesetCategoryLabel, TilesetMenuRoot, TilesetToggleButton,
+	ToolButton, ToolKind,
+	UiRoot,
+};
+
+/// UI 初始化：HUD + 左侧面板。
+pub fn setup_ui(mut commands: Commands) {
+	commands.spawn((
+		Text::new("按 O 或点【打开】导入 tileset"),
+		TextFont {
+			font_size: 16.0,
+			..default()
+		},
+		TextColor(Color::WHITE),
+		Node {
+			position_type: PositionType::Absolute,
+			top: Val::Px(10.0),
+			left: Val::Px(10.0),
+			..default()
+		},
+		HudText,
+	));
+
+	spawn_ui_root(&mut commands);
+	super::context_menu::spawn_context_menu(&mut commands);
+}
+
+fn spawn_ui_root(commands: &mut Commands) {
+	let root = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				height: Val::Percent(100.0),
+				flex_direction: FlexDirection::Row,
+				..default()
+			},
+			// 重要：UI 画在世界之上。这里必须透明，否则会把世界渲染整块盖住。
+			BackgroundColor(Color::NONE),
+			UiRoot,
+		))
+		.id();
+
+	let left_panel = commands
+		.spawn((
+			Node {
+				width: Val::Px(LEFT_PANEL_WIDTH_PX),
+				height: Val::Percent(100.0),
+				flex_direction: FlexDirection::Column,
+				padding: UiRect::all(Val::Px(10.0)),
+				row_gap: Val::Px(10.0),
+				..default()
+			},
+			BackgroundColor(UI_PANEL),
+		))
+		.id();
+
+	let toolbar = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				height: Val::Auto,
+				flex_direction: FlexDirection::Row,
+				flex_wrap: FlexWrap::Wrap,
+				column_gap: Val::Px(8.0),
+				row_gap: Val::Px(8.0),
+				..default()
+			},
+		))
+		.id();
+
+	commands.entity(toolbar).with_children(|p| {
+		// 打开
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ActionButton(ActionKind::OpenTileset),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("打开(O)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		// 新建
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ActionButton(ActionKind::NewMap),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("新建(R)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		// 保存
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ActionButton(ActionKind::SaveMap),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("保存(S)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		// 读取
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ActionButton(ActionKind::LoadMap),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("读取(L)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		// 导入地图
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ActionButton(ActionKind::ImportMap),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("导入"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		// 导出地图
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ActionButton(ActionKind::ExportMap),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("导出"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		// --- 工具栏（参考 RM：铅笔/矩形/填充/选择） ---
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Pencil),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("笔刷(1)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Eraser),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("橡皮(6)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Rect),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("矩形(2)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Fill),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("填充(3)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Select),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("选择(4)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		// 不再提供“粘贴工具”按钮：粘贴通过 Ctrl+V / 右键菜单进入，避免与菜单重复。
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ToolButton(ToolKind::Eyedropper),
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("吸管(I)"),
+				TextFont {
+					font_size: 14.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+	});
+
+	let tileset_bar = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				height: Val::Auto,
+				overflow: Overflow::visible(),
+				flex_direction: FlexDirection::Row,
+				align_items: AlignItems::Center,
+				column_gap: Val::Px(8.0),
+				padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
+				..default()
+			},
+			BackgroundColor(UI_PANEL),
+			ZIndex(1000),
+			TilesetBar,
+		))
+		.id();
+
+	commands.entity(tileset_bar).with_children(|p| {
+		p.spawn((
+			Text::new("分类:"),
+			TextFont {
+				font_size: 13.0,
+				..default()
+			},
+			TextColor(Color::WHITE),
+		));
+		p.spawn((
+			Text::new("全部"),
+			TextFont {
+				font_size: 13.0,
+				..default()
+			},
+			TextColor(Color::WHITE),
+			TilesetCategoryLabel,
+		));
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(28.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			TilesetCategoryCycleButton,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("分类"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(28.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			TilesetToggleButton,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("选择"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+	});
+
+	let tileset_menu = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				max_height: Val::Px(360.0),
+				overflow: Overflow::scroll_y(),
+				position_type: PositionType::Absolute,
+				top: Val::Px(32.0),
+				left: Val::Px(0.0),
+				flex_direction: FlexDirection::Column,
+				row_gap: Val::Px(6.0),
+				padding: UiRect::all(Val::Px(8.0)),
+				..default()
+			},
+			BackgroundColor(UI_PANEL),
+			ZIndex(2000),
+			Visibility::Hidden,
+			TilesetMenuRoot,
+		))
+		.id();
+
+	let palette_scroll = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				flex_grow: 1.0,
+				overflow: Overflow::scroll_y(),
+				..default()
+			},
+			PaletteScroll,
+		))
+		.id();
+
+	let palette_root = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				flex_direction: FlexDirection::Row,
+				flex_wrap: FlexWrap::Wrap,
+				column_gap: Val::Px(6.0),
+				row_gap: Val::Px(6.0),
+				..default()
+			},
+			PaletteRoot,
+		))
+		.id();
+
+	let right_panel = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				height: Val::Percent(100.0),
+				flex_direction: FlexDirection::Column,
+				..default()
+			},
+			BackgroundColor(Color::NONE),
+			CanvasRoot,
+		))
+		.id();
+
+	let right_topbar = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				height: Val::Px(RIGHT_TOPBAR_HEIGHT_PX),
+				flex_direction: FlexDirection::Row,
+				flex_wrap: FlexWrap::Wrap,
+				align_items: AlignItems::Center,
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
+				column_gap: Val::Px(8.0),
+				row_gap: Val::Px(8.0),
+				..default()
+			},
+			BackgroundColor(UI_PANEL),
+		))
+		.id();
+
+	let right_content = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				flex_grow: 1.0,
+				..default()
+			},
+			BackgroundColor(Color::NONE),
+		))
+		.id();
+
+	commands.entity(right_panel).add_child(right_topbar);
+	commands.entity(right_panel).add_child(right_content);
+
+	commands.entity(right_topbar).with_children(|p| {
+		p.spawn((
+			Text::new("地图尺寸:"),
+			TextFont {
+				font_size: 13.0,
+				..default()
+			},
+			TextColor(Color::WHITE),
+		));
+
+		for (w, h) in [(40u32, 25u32), (64u32, 36u32), (100u32, 60u32)] {
+			p.spawn((
+				Button,
+				Node {
+					height: Val::Px(36.0),
+					padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+					align_items: AlignItems::Center,
+					justify_content: JustifyContent::Center,
+					..default()
+				},
+				BackgroundColor(UI_BUTTON),
+				ActionButton(ActionKind::SetMapSize { width: w, height: h }),
+			))
+			.with_children(|p| {
+				p.spawn((
+					Text::new(format!("{w}x{h}")),
+					TextFont {
+						font_size: 13.0,
+						..default()
+					},
+					TextColor(Color::WHITE),
+				));
+			});
+		}
+
+		p.spawn((
+			Text::new("自定义:"),
+			TextFont {
+				font_size: 13.0,
+				..default()
+			},
+			TextColor(Color::WHITE),
+		));
+
+		// 宽
+		p.spawn((
+			Button,
+			Node {
+				width: Val::Px(86.0),
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			MapSizeWidthField,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("W"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+			p.spawn((
+				Text::new(""),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+				MapSizeWidthText,
+			));
+		});
+
+		// 高
+		p.spawn((
+			Button,
+			Node {
+				width: Val::Px(86.0),
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			MapSizeHeightField,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("H"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+			p.spawn((
+				Text::new(""),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+				MapSizeHeightText,
+			));
+		});
+
+		// 应用
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			MapSizeApplyButton,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("应用(Enter)"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		// Shift Map 模式：空白 / 环绕
+		p.spawn((
+			Text::new("Shift:"),
+			TextFont {
+				font_size: 13.0,
+				..default()
+			},
+			TextColor(Color::WHITE),
+		));
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(36.0),
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			ShiftModeButton,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("空白"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+				ShiftModeLabel,
+			));
+		});
+	});
+
+	commands.entity(palette_scroll).add_child(palette_root);
+	commands.entity(tileset_bar).add_child(tileset_menu);
+	commands.entity(left_panel).add_child(toolbar);
+	commands.entity(left_panel).add_child(tileset_bar);
+	commands.entity(left_panel).add_child(palette_scroll);
+	commands.entity(root).add_child(left_panel);
+	commands.entity(root).add_child(right_panel);
+}
