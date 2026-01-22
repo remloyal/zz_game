@@ -25,7 +25,7 @@ use tileset::{
 use types::{
     EditorConfig, EditorState, MapSizeInput, PanState, TilesetLibrary, TilesetLoading, TilesetRuntime,
     Clipboard, ContextMenuCommand, ContextMenuState, PastePreview, PasteState, SelectionState,
-    ShiftMapSettings, ToolState, UiState, UndoStack,
+	ShiftMapSettings, ToolState, UiState, UndoStack, LayerState,
 };
 use ui::{
     action_button_click, apply_custom_map_size, build_palette_when_ready, map_size_text_input,
@@ -51,6 +51,7 @@ use world::{
 	update_paste_preview,
     selection_move_with_mouse,
     apply_context_menu_command,
+	layer_shortcuts,
 };
 
 /// UI 相关常量
@@ -103,6 +104,7 @@ pub fn run() {
         .init_resource::<ContextMenuCommand>()
 		.init_resource::<PasteState>()
 		.init_resource::<PastePreview>()
+        .init_resource::<LayerState>()
 		.init_resource::<SelectionState>()
 		.init_resource::<ShiftMapSettings>()
         .init_resource::<UndoStack>()
@@ -165,6 +167,7 @@ pub fn run() {
             Update,
             (
                 keyboard_shortcuts,
+                layer_shortcuts,
                 tool_shortcuts,
                 eyedropper_hold_shortcut,
                 copy_paste_shortcuts,
@@ -189,20 +192,14 @@ pub fn run() {
                 camera_pan,
             ),
         )
-        .add_systems(
-            Update,
-            (
-                draw_canvas_helpers,
-                update_paste_preview,
-                selection_move_with_mouse,
-                eyedropper_with_mouse,
-                paint_with_mouse,
-				rect_with_mouse,
-				fill_with_mouse,
-				select_with_mouse,
-				paste_with_mouse,
-                update_hud_text,
-            ),
-        )
+        .add_systems(Update, draw_canvas_helpers)
+        .add_systems(Update, update_paste_preview)
+        .add_systems(Update, selection_move_with_mouse)
+        .add_systems(Update, eyedropper_with_mouse)
+        .add_systems(Update, paint_with_mouse)
+        .add_systems(Update, rect_with_mouse)
+        .add_systems(Update, fill_with_mouse)
+        .add_systems(Update, select_with_mouse)
+        .add_systems(Update, (paste_with_mouse, update_hud_text))
         .run();
 }

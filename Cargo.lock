@@ -4832,6 +4832,7 @@ dependencies = [
 name = "tilemap_core"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "serde",
 ]
 
@@ -4844,6 +4845,17 @@ dependencies = [
  "rfd",
  "ron 0.8.1",
  "serde",
+ "tilemap_core",
+ "tilemap_format",
+]
+
+[[package]]
+name = "tilemap_format"
+version = "0.1.0"
+dependencies = [
+ "ron 0.8.1",
+ "serde",
+ "tilemap_core",
 ]
 
 [[package]]

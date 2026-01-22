@@ -9,3 +9,5 @@ serde = { version = "1", features = ["derive"] }
 ron = "0.8"
 rfd = "0.15"
 blake3 = "1"
+tilemap_core = { path = "../tilemap_core", features = ["serde", "bevy"] }
+tilemap_format = { path = "../tilemap_format" }

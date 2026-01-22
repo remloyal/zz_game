@@ -8,9 +8,14 @@ use std::collections::HashMap;
 
 use super::paths::workspace_assets_dir;
 
+mod tilemap;
+pub use tilemap::{LayerState, TileEntities};
+
 pub const DEFAULT_SPRITESHEET: &str = "tiles.png";
 pub const DEFAULT_SAVE_PATH: &str = "maps/map.ron";
 pub const DEFAULT_UI_FONT_PATH: &str = "chinese.ttf";
+
+pub use tilemap_core::{TileMapData, TileRef, TilesetId, DEFAULT_LAYER_COUNT};
 
 /// 标记“世界相机”（用于世界坐标拾取/绘制）。
 ///
@@ -21,24 +26,6 @@ pub struct WorldCamera;
 
 #[derive(Resource, Clone)]
 pub struct UiFont(pub Handle<Font>);
-
-/// 稳定 tileset id。
-///
-/// 约定：使用导入图片内容的 hash（或至少是文件名+hash）生成，保证跨机器/拷贝时一致。
-pub type TilesetId = String;
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct TileRef {
-    pub tileset_id: TilesetId,
-    pub index: u32,
-    /// 0,1,2,3 => 0/90/180/270 度顺时针。
-    #[serde(default)]
-    pub rot: u8,
-    #[serde(default)]
-    pub flip_x: bool,
-    #[serde(default)]
-    pub flip_y: bool,
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TilesetEntry {
@@ -77,34 +64,6 @@ pub struct PendingTileset {
 #[derive(Resource, Default)]
 pub struct TilesetLoading {
     pub pending: Vec<PendingTileset>,
-}
-
-#[derive(Resource)]
-pub struct TileEntities {
-    pub width: u32,
-    pub height: u32,
-    pub entities: Vec<Entity>,
-}
-
-#[derive(Resource, Serialize, Deserialize, Clone)]
-pub struct TileMapData {
-    pub width: u32,
-    pub height: u32,
-	pub tiles: Vec<Option<TileRef>>,
-}
-
-impl TileMapData {
-    pub fn new(width: u32, height: u32) -> Self {
-        Self {
-            width,
-            height,
-			tiles: vec![None; (width * height) as usize],
-        }
-    }
-
-    pub fn idx(&self, x: u32, y: u32) -> usize {
-        (y * self.width + x) as usize
-    }
 }
 
 /// 编辑器配置。

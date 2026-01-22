@@ -15,10 +15,12 @@
 ## 1. 现状盘点（当前 tilemap_editor 已有）
 
 **地图**
-- 单层地图数据：`TileMapData { width, height, tiles: Vec<Option<TileRef>> }`
+- 多图层地图数据：`TileMapData { width, height, layers, tiles: Vec<Option<TileRef>> }`（tiles 按 layer 扁平存储）
+- 图层语义：写入默认 current active layer；读取（吸管/单格变换）默认 topmost non-empty layer
+- 图层切换快捷键（PgUp/PgDn/L）+ HUD 显示当前层
 - 预设尺寸 + 自定义宽高输入 + 应用
 - 新建（清空）
-- 保存/读取（固定路径 + 快捷键）
+- 保存/读取（MapFileV3，兼容旧版本迁移）
 - 导入/导出（文件选择器）
 
 **绘制/视图**
@@ -40,28 +42,7 @@
 
 ### P0（强烈建议补齐，否则很难像编辑器）
 
-1) **多图层（至少 2 层）**
-- RM：通常表现为“地表/上层”叠加（内部可能更多层），并有专门的阴影层。
-- 本项目最小化：`Ground` + `Upper`（可选 `Shadow`）。
-
-2) **工具系统（不仅仅是单格画笔）**
-- 铅笔（单格）、橡皮（单格）已经有。
-- 还需要：
-	- 矩形框选/矩形填充
-	- 油漆桶（Flood Fill）
-	- 取色/吸管（从地图上取 tile 设为当前选中）
-
-3) **撤销/重做（Undo/Redo）**
-- RM 编辑器的“可用性核心”。
-- 建议以 Command/Diff 形式记录变更（每次 paint/rect/fill 生成一个命令）。
-
-4) **选择/复制/粘贴（Stamp）**
-- RM 常用 workflow：框选一块图案 → 复制 → 盖章到别处。
-- 最小：矩形选择 + 复制到剪贴板（内部缓冲）+ 粘贴。
-
-5) **地图移位（Shift Map）**
-- RM 的“整体向上/下/左/右平移一格（空出位置）”。
-- 对关卡制作非常关键。
+P0 当前已基本补齐：多图层（至少 2 层）、工具（Rect/Fill/Select/Eyedropper 等）、Undo/Redo、选择复制粘贴、Shift Map。
 
 ### P1（做完 P0 后，体验会明显接近 RM）
 
@@ -70,6 +51,7 @@
 
 7) **图层可见性/锁定**
 - 当前层可编辑，其它层只显示或隐藏。
+- 建议补齐“图层面板 UI”（当前层、可见性、锁定、重命名）。
 
 8) **更完善的 tileset 管理**
 - RM 有 A1~A5、B~E 标签页概念（含自动图块）。
@@ -98,18 +80,13 @@
 ## 3. 推荐的目标数据模型（面向多层+元数据）
 
 ### 3.1 Tile 与图层
-建议把单层 `tiles: Vec<Option<TileRef>>` 升级为：
+当前实现采用“最小侵入”的扁平方案：
 
-- `TileMap`
-	- `size: UVec2`
-	- `layers: Vec<TileLayer>`（至少 2 个）
-	- `meta: MapMeta`（可选：region/passability 等）
+- `TileMapData { width, height, layers, tiles: Vec<Option<TileRef>> }`
+	- `tiles` 按 `layer0..layerN` 顺序扁平存储
+	- `idx_layer(layer,x,y)` 寻址
 
-- `TileLayer`
-	- `id: LayerId`（Ground/Upper/Shadow/…）
-	- `tiles: Vec<Option<TileRef>>`
-
-这样后续 UI 只需要切换“当前编辑层”。
+优点：迁移成本低，工具/渲染同步更直接；后续如需更强语义（层名/锁定/可见性等），可再在上层引入 Layer 元数据表。
 
 ### 3.2 元数据层（可选）
 把“通行/区域/地形标记”等当作独立网格层：
@@ -162,9 +139,10 @@
 ### 7.1 推荐的 crate 划分（逐步迁移）
 
 1) `tilemap_core`（纯逻辑，无 Bevy 依赖）
-- 数据结构：`TileMap`/`TileLayer`/`TileRef`/`TilesetId`
-- 算法：resize/shift/fill/rect/stamp
-- Undo：Command + UndoStack
+
+现状：已创建并开始承载核心类型（`TileMapData`/`TileRef`/索引方法）。
+
+说明：为了让编辑器以最小改动继续把 `TileMapData` 当作 Bevy `Resource` 使用，当前 `tilemap_core` 提供可选 `bevy` feature；后续如果希望“严格纯逻辑”，可以再做一层 wrapper/newtype 逐步去 Bevy 依赖。
 
 2) `tilemap_format`（序列化/版本迁移）
 - RON/JSON 存取
@@ -211,6 +189,10 @@
 
 ## 9. 本仓库下一步建议（我可以直接动手）
 
-你确认后我可以按“风险最小”方式开始：
-- 先创建 `crates/tilemap_core` 并迁移 `TileMapData/TileRef` 相关纯结构与算法（resize/shift/fill）。
-- 让 `tilemap_editor` 仍然保持现状渲染，但 map 数据来源变成 core crate，逐步替换。
+已启动的“风险最小”重构：
+- 已创建 `crates/tilemap_core` 并迁移 `TileMapData/TileRef`（编辑器通过依赖 + re-export 平滑接入）。
+- 已开始把 `types.rs` 做子模块化（例如 tilemap 相关 Resource 先拆出）。
+
+下一步可以继续：
+- 把 persistence（MapFileV1/V2/V3 与升级逻辑）抽到 `tilemap_format`。
+- 把 world.rs 按功能拆成 `editor/tools/*`、`editor/render/*`、`editor/input/*`，并保持 system 注册点不变。

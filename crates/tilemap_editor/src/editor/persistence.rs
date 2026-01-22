@@ -2,25 +2,9 @@
 
 use std::path::PathBuf;
 
-use crate::editor::types::{TileMapData, TileRef, TilesetEntry, TilesetLibrary};
+use crate::editor::types::{TileMapData, TilesetEntry, TilesetLibrary};
 
 pub const DEFAULT_TILESET_LIBRARY_PATH: &str = "tilesets/library.ron";
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct MapFileV1 {
-    width: u32,
-    height: u32,
-    tiles: Vec<Option<u32>>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct MapFileV2 {
-    width: u32,
-    height: u32,
-    /// 地图所需 tileset 列表（用于跨机器拷贝后自动回显渲染）
-    tilesets: Vec<TilesetEntry>,
-    tiles: Vec<Option<TileRef>>,
-}
 
 pub fn save_tileset_library_to_file(lib: &TilesetLibrary, path: &str) -> Result<(), String> {
     let path = PathBuf::from(path);
@@ -74,15 +58,7 @@ pub fn save_map_to_file(map: &TileMapData, lib: &TilesetLibrary, path: &str) -> 
         }
     }
 
-    let v2 = MapFileV2 {
-        width: map.width,
-        height: map.height,
-        tilesets,
-        tiles: map.tiles.clone(),
-    };
-
-    let text = ron::ser::to_string_pretty(&v2, ron::ser::PrettyConfig::default())
-        .map_err(|e| e.to_string())?;
+    let text = tilemap_format::encode_map_ron_v3(map, tilesets)?;
     std::fs::write(path, text).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -90,37 +66,5 @@ pub fn save_map_to_file(map: &TileMapData, lib: &TilesetLibrary, path: &str) -> 
 pub fn load_map_from_file(path: &str) -> Result<(TileMapData, Vec<TilesetEntry>), String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
 
-    if let Ok(v2) = ron::from_str::<MapFileV2>(&text) {
-        return Ok((
-            TileMapData {
-                width: v2.width,
-                height: v2.height,
-                tiles: v2.tiles,
-            },
-            v2.tilesets,
-        ));
-    }
-
-    // 兼容旧版本：tiles 是 Option<u32>
-    let v1 = ron::from_str::<MapFileV1>(&text).map_err(|e| e.to_string())?;
-    let tiles = v1
-        .tiles
-        .into_iter()
-        .map(|t| t.map(|index| TileRef {
-            tileset_id: String::new(),
-            index,
-			rot: 0,
-			flip_x: false,
-			flip_y: false,
-        }))
-        .collect();
-
-    Ok((
-        TileMapData {
-            width: v1.width,
-            height: v1.height,
-            tiles,
-        },
-        Vec::new(),
-    ))
+    tilemap_format::decode_map_ron::<TilesetEntry>(&text)
 }

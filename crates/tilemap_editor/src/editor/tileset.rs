@@ -12,13 +12,15 @@ use super::paths::{path_join_asset, workspace_assets_dir};
 use super::persistence::{load_tileset_library_from_file, save_tileset_library_to_file, DEFAULT_TILESET_LIBRARY_PATH};
 use super::types::{
 	EditorConfig, PendingTileset, TileEntities, TileMapData, TilesetEntry, TilesetLibrary,
-	TilesetLoading, TilesetRuntime, TilesetRuntimeEntry, DEFAULT_SPRITESHEET,
+	TilesetLoading, TilesetRuntime, TilesetRuntimeEntry, DEFAULT_SPRITESHEET, DEFAULT_LAYER_COUNT,
 };
 
 /// 启动时创建一张空地图（用于显示网格/承载绘制），不依赖 tileset。
 pub fn setup_map(mut commands: Commands, config: Res<EditorConfig>) {
-	commands.insert_resource(TileMapData::new(config.map_size.x, config.map_size.y));
-	let tiles = spawn_map_entities(&mut commands, &config);
+	let map = TileMapData::new(config.map_size.x, config.map_size.y);
+	let layers = map.layers.max(DEFAULT_LAYER_COUNT);
+	commands.insert_resource(map);
+	let tiles = spawn_map_entities_with_layers(&mut commands, &config, layers);
 	commands.insert_resource(tiles);
 }
 
@@ -251,38 +253,54 @@ pub fn spawn_map_entities(
 	commands: &mut Commands,
 	config: &EditorConfig,
 ) -> TileEntities {
+	spawn_map_entities_with_layers(commands, config, DEFAULT_LAYER_COUNT)
+}
+
+/// 生成地图格子实体（每格每层一个 Sprite），并返回 `TileEntities`。
+///
+/// 注意：函数本身不负责清理旧实体，调用方按需先 despawn。
+pub fn spawn_map_entities_with_layers(
+	commands: &mut Commands,
+	config: &EditorConfig,
+	layers: u32,
+) -> TileEntities {
 	let width = config.map_size.x;
 	let height = config.map_size.y;
+	let layers = layers.max(1);
 	let tile_w = config.tile_size.x as f32;
 	let tile_h = config.tile_size.y as f32;
 
-	let mut entities = Vec::with_capacity((width * height) as usize);
+	let mut entities = Vec::with_capacity((width * height * layers) as usize);
 
-	for y in 0..height {
-		for x in 0..width {
-			let world_x = (x as f32 + 0.5) * tile_w;
-			let world_y = (y as f32 + 0.5) * tile_h;
+	for layer in 0..layers {
+		let z = layer as f32 * 0.1;
+		for y in 0..height {
+			for x in 0..width {
+				let world_x = (x as f32 + 0.5) * tile_w;
+				let world_y = (y as f32 + 0.5) * tile_h;
 
-			// 初始隐藏，只有实际绘制后才显示
-			let entity = commands
-				.spawn((
-					Sprite {
-						image: Handle::<Image>::default(),
-						rect: None,
-						..default()
-					},
-					Transform::from_translation(Vec3::new(world_x, world_y, 0.0)),
-					Visibility::Hidden,
-				))
-				.id();
+				// 初始隐藏，只有实际绘制后才显示
+				let entity = commands
+					.spawn((
+						Sprite {
+							image: Handle::<Image>::default(),
+							rect: None,
+							..default()
+						},
+						Transform::from_translation(Vec3::new(world_x, world_y, z)),
+						Visibility::Hidden,
+					))
+					.id();
 
-			entities.push(entity);
+				entities.push(entity);
+			}
 		}
 	}
 
 	TileEntities {
 		width,
 		height,
+		layers,
 		entities,
 	}
 }

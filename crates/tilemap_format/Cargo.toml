@@ -1,0 +1,11 @@
+[package]
+name = "tilemap_format"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ron = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+# 依赖核心 tilemap 数据结构（需要 serde 支持）
+tilemap_core = { path = "../tilemap_core", features = ["serde"] }

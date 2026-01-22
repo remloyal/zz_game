@@ -51,11 +51,16 @@ fn resized_map_copy(old: Option<&TileMapData>, width: u32, height: u32) -> TileM
 
 	let copy_w = old.width.min(width);
 	let copy_h = old.height.min(height);
-	for y in 0..copy_h {
-		for x in 0..copy_w {
-			let src = old.idx(x, y);
-			let dst = new_map.idx(x, y);
-			new_map.tiles[dst] = old.tiles[src].clone();
+	let layers_to_copy = old.layers.min(new_map.layers).max(1);
+	for layer in 0..layers_to_copy {
+		for y in 0..copy_h {
+			for x in 0..copy_w {
+				let src = old.idx_layer(layer, x, y);
+				let dst = new_map.idx_layer(layer, x, y);
+				if src < old.tiles.len() && dst < new_map.tiles.len() {
+					new_map.tiles[dst] = old.tiles[src].clone();
+				}
+			}
 		}
 	}
 	new_map
@@ -1523,7 +1528,7 @@ pub fn apply_custom_map_size(
 		}
 	}
 	commands.remove_resource::<TileEntities>();
-	let tiles = super::tileset::spawn_map_entities(&mut commands, &config);
+	let tiles = super::tileset::spawn_map_entities_with_layers(&mut commands, &config, new_map.layers);
 	apply_map_to_entities(&runtime, &new_map, &tiles, &mut sprite_vis_q, &config);
 	commands.insert_resource(tiles);
 }
@@ -1999,7 +2004,7 @@ pub fn action_button_click(
 				commands.remove_resource::<TileMapData>();
 
 				config.map_size = UVec2::new(loaded.width, loaded.height);
-				let tiles = super::tileset::spawn_map_entities(&mut commands, &config);
+				let tiles = super::tileset::spawn_map_entities_with_layers(&mut commands, &config, loaded.layers);
 				commands.insert_resource(loaded.clone());
 				apply_map_to_entities(&runtime, &loaded, &tiles, &mut sprite_vis_q, &config);
 				commands.insert_resource(tiles);
@@ -2036,7 +2041,7 @@ pub fn action_button_click(
 				}
 			}
 			commands.remove_resource::<TileEntities>();
-			let tiles = super::tileset::spawn_map_entities(&mut commands, &config);
+			let tiles = super::tileset::spawn_map_entities_with_layers(&mut commands, &config, new_map.layers);
 			apply_map_to_entities(&runtime, &new_map, &tiles, &mut sprite_vis_q, &config);
 			commands.insert_resource(tiles);
 		}
@@ -2071,7 +2076,7 @@ pub fn action_button_click(
 				commands.remove_resource::<TileMapData>();
 
 				config.map_size = UVec2::new(loaded.width, loaded.height);
-				let tiles = super::tileset::spawn_map_entities(&mut commands, &config);
+				let tiles = super::tileset::spawn_map_entities_with_layers(&mut commands, &config, loaded.layers);
 				commands.insert_resource(loaded.clone());
 				apply_map_to_entities(&runtime, &loaded, &tiles, &mut sprite_vis_q, &config);
 				commands.insert_resource(tiles);
@@ -2116,6 +2121,8 @@ pub fn update_hud_text(
 	lib: Res<TilesetLibrary>,
 	runtime: Res<TilesetRuntime>,
 	tools: Res<ToolState>,
+	layer_state: Res<super::types::LayerState>,
+	map: Option<Res<TileMapData>>,
 	clipboard: Res<Clipboard>,
 	paste: Res<PasteState>,
 	hud_q: Query<Entity, With<HudText>>,
@@ -2130,15 +2137,31 @@ pub fn update_hud_text(
 		.and_then(|id| runtime.by_id.get(id).map(|r| r.columns.saturating_mul(r.rows)))
 		.unwrap_or(0);
 
+	let (active_layer, total_layers) = map
+		.as_deref()
+		.map(|m| {
+			let total = m.layers.max(1);
+			(layer_state.active.min(total - 1), total)
+		})
+		.unwrap_or((layer_state.active, 1));
+	let layer_name = match active_layer {
+		0 => "Ground",
+		1 => "Upper",
+		_ => "Other",
+	};
+
 	let mut msg = if tile_count == 0 {
 		"未选择 tileset：按 O 或点左上角【打开】导入".to_string()
 	} else {
 		format!(
-			"选中 tile: {}\n地图: {} ({}x{})\n图块: {}x{} | tiles: {}",
+			"选中 tile: {}\n地图: {} ({}x{})\n图层: {}/{} ({})\n图块: {}x{} | tiles: {}",
 			state.selected_tile,
 			config.save_path,
 			config.map_size.x,
 			config.map_size.y,
+			active_layer + 1,
+			total_layers,
+			layer_name,
 			config.tile_size.x,
 			config.tile_size.y,
 			tile_count
