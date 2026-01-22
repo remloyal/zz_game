@@ -114,6 +114,22 @@ pub fn rect_with_mouse(mut gizmos: Gizmos, params: RectWithMouseParams, mut drag
         tile_entities.height,
     );
 
+    let layer = layer_state.active.min(map.layers.saturating_sub(1));
+    let layer_locked = map
+        .layer_data
+        .get(layer as usize)
+        .map(|d| d.locked)
+        .unwrap_or(false);
+    let layer_visible = map
+        .layer_data
+        .get(layer as usize)
+        .map(|d| d.visible)
+        .unwrap_or(true);
+    if layer_locked {
+        drag.active = false;
+        return;
+    }
+
     // 开始拖拽（左键填充；右键保留给菜单）
     if !drag.active {
         let Some(pos) = pos else {
@@ -180,7 +196,6 @@ pub fn rect_with_mouse(mut gizmos: Gizmos, params: RectWithMouseParams, mut drag
     };
 
     let mut changes: Vec<CellChange> = Vec::new();
-    let layer = layer_state.active.min(map.layers.saturating_sub(1));
     for y in min_y..=max_y {
         for x in min_x..=max_x {
             let idx = map.idx_layer(layer, x, y);
@@ -204,6 +219,9 @@ pub fn rect_with_mouse(mut gizmos: Gizmos, params: RectWithMouseParams, mut drag
             let entity = tile_entities.entities[entity_idx];
             if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
                 apply_tile_visual(&runtime, &desired, &mut sprite, &mut tf, &mut vis, &config);
+                if !layer_visible {
+                    *vis = Visibility::Hidden;
+                }
             }
         }
     }

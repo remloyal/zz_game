@@ -72,23 +72,37 @@ pub fn run() {
 			(
 				(
 					// --- UI: tileset/palette/tools ---
-					ui::apply_ui_font_to_all_text,
-					tileset::progress_spritesheet_loading,
-					tileset::open_spritesheet_shortcut,
-					ui::update_tileset_active_label,
-					ui::update_tileset_category_label,
-					ui::tileset_category_cycle_click,
-					ui::tileset_toggle_button_click,
-					ui::tileset_menu_visibility,
-					ui::rebuild_tileset_menu_when_needed,
-					ui::tileset_menu_item_click,
-					ui::build_palette_when_ready,
-					ui::palette_tile_click,
-					ui::palette_scroll_wheel,
-					ui::tool_button_click,
-					ui::sync_tool_button_styles,
-					ui::shift_mode_button_click,
-					ui::update_shift_mode_label,
+					(
+						ui::apply_ui_font_to_all_text,
+						tileset::progress_spritesheet_loading,
+						tileset::open_spritesheet_shortcut,
+						ui::layer_topbar_buttons,
+						ui::update_layer_topbar_label,
+						ui::update_tileset_active_label,
+						ui::update_tileset_category_label,
+						ui::tileset_category_cycle_click,
+						ui::tileset_toggle_button_click,
+						ui::tileset_menu_visibility,
+					)
+						.chain(),
+					(
+						(
+							ui::rebuild_tileset_menu_when_needed,
+							ui::tileset_menu_item_click,
+							ui::build_palette_when_ready,
+							ui::palette_tile_click,
+							ui::palette_scroll_wheel,
+						)
+							.chain(),
+						(
+							ui::tool_button_click,
+							ui::sync_tool_button_styles,
+							ui::shift_mode_button_click,
+							ui::update_shift_mode_label,
+						)
+							.chain(),
+					)
+						.chain(),
 				)
 					.chain(),
 				(
@@ -141,6 +155,7 @@ pub fn run() {
 			(
 				// --- World: camera ---
 				world::refresh_map_on_tileset_runtime_change,
+				world::sync_layer_visibility_on_layer_data_change,
 				world::recenter_camera_on_map_change,
 				world::camera_zoom,
 				world::camera_pan,

@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use crate::editor::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX, UI_BUTTON, UI_PANEL};
 use crate::editor::types::{
 	ActionButton, ActionKind, CanvasRoot, HudText,
+		LayerPrevButton, LayerNextButton, LayerActiveLabel, LayerActiveVisLabel, LayerActiveVisToggleButton,
 	MapSizeApplyButton, MapSizeHeightField, MapSizeHeightText, MapSizeWidthField, MapSizeWidthText,
 	PaletteRoot, PaletteScroll,
 	ShiftModeButton, ShiftModeLabel,
@@ -674,6 +675,30 @@ fn spawn_ui_root(commands: &mut Commands) {
 			));
 		});
 
+        // Toggle Grid
+        p.spawn((
+            Button,
+            Node {
+                height: Val::Px(36.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(UI_BUTTON),
+            ActionButton(ActionKind::ToggleGrid),
+        ))
+        .with_children(|p| {
+             p.spawn((
+                Text::new("网格"),
+                TextFont {
+                    font_size: 13.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
+
 		// Shift Map 模式：空白 / 环绕
 		p.spawn((
 			Text::new("Shift:"),
@@ -707,6 +732,116 @@ fn spawn_ui_root(commands: &mut Commands) {
 			));
 		});
 	});
+
+	// 悬浮：地图右上角图层切换（不是顶栏）
+	let layer_overlay = commands
+		.spawn((
+			Node {
+				position_type: PositionType::Absolute,
+				top: Val::Px(10.0),
+				right: Val::Px(10.0),
+				flex_direction: FlexDirection::Row,
+				align_items: AlignItems::Center,
+				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+				column_gap: Val::Px(6.0),
+				..default()
+			},
+			BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+		))
+		.id();
+
+	commands.entity(layer_overlay).with_children(|p| {
+		p.spawn((
+			Text::new("层"),
+			TextFont {
+				font_size: 13.0,
+				..default()
+			},
+			TextColor(Color::WHITE),
+		));
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(28.0),
+				padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			LayerPrevButton,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("←"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+
+		p.spawn((
+			Text::new("1/1"),
+			TextFont {
+				font_size: 13.0,
+				..default()
+			},
+			TextColor(Color::WHITE),
+			LayerActiveLabel,
+		));
+
+		// 当前层显隐
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(28.0),
+				padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			LayerActiveVisToggleButton,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("显"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+				LayerActiveVisLabel,
+			));
+		});
+
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(28.0),
+				padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			LayerNextButton,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("→"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+		});
+	});
+
+	commands.entity(right_content).add_child(layer_overlay);
 
 	commands.entity(palette_scroll).add_child(palette_root);
 	commands.entity(tileset_bar).add_child(tileset_menu);

@@ -61,6 +61,8 @@ pub enum ActionKind {
     ImportMap,
     /// 导出地图到文件（文件选择器）。
     ExportMap,
+    /// 切换网格显示。
+    ToggleGrid,
 }
 
 #[derive(Component)]
@@ -116,3 +118,20 @@ impl Default for MapSizeInput {
         }
     }
 }
+
+// --- 右上角：图层切换控件 ---
+
+#[derive(Component)]
+pub struct LayerPrevButton;
+
+#[derive(Component)]
+pub struct LayerNextButton;
+
+#[derive(Component)]
+pub struct LayerActiveLabel;
+
+#[derive(Component)]
+pub struct LayerActiveVisToggleButton;
+
+#[derive(Component)]
+pub struct LayerActiveVisLabel;

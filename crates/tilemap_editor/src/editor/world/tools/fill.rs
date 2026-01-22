@@ -56,6 +56,21 @@ pub fn fill_with_mouse(
         return;
     };
 
+    let layer = layer_state.active.min(map.layers.saturating_sub(1));
+    let layer_locked = map
+        .layer_data
+        .get(layer as usize)
+        .map(|d| d.locked)
+        .unwrap_or(false);
+    let layer_visible = map
+        .layer_data
+        .get(layer as usize)
+        .map(|d| d.visible)
+        .unwrap_or(true);
+    if layer_locked {
+        return;
+    }
+
     let left_start = buttons.just_pressed(MouseButton::Left);
     if !left_start {
         return;
@@ -95,7 +110,6 @@ pub fn fill_with_mouse(
         })
     };
 
-    let layer = layer_state.active.min(map.layers.saturating_sub(1));
     let start_idx = map.idx_layer(layer, pos.x, pos.y);
     let target = map.tiles[start_idx].clone();
     if target == desired {
@@ -163,6 +177,9 @@ pub fn fill_with_mouse(
         let entity = tile_entities.entities[entity_idx];
         if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
             apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
+            if !layer_visible {
+                *vis = Visibility::Hidden;
+            }
         }
     }
 

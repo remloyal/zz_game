@@ -41,7 +41,9 @@ pub use tools::{
 };
 pub use undo::{CellChange, EditCommand, UndoStack};
 pub use ui::{
-    ActionButton, ActionKind, CanvasRoot, HudText, MapSizeApplyButton, MapSizeFocus, MapSizeHeightField,
+    ActionButton, ActionKind, CanvasRoot, HudText,
+    LayerPrevButton, LayerNextButton, LayerActiveLabel, LayerActiveVisLabel, LayerActiveVisToggleButton,
+    MapSizeApplyButton, MapSizeFocus, MapSizeHeightField,
     MapSizeHeightText, MapSizeInput, MapSizeWidthField, MapSizeWidthText, PaletteRoot, PaletteScroll,
     PaletteTileButton, TilesetActiveLabel, TilesetBar, TilesetCategoryCycleButton, TilesetCategoryLabel,
     TilesetMenuRoot, TilesetSelectItem, TilesetToggleButton, UiFont, UiRoot, UiState,

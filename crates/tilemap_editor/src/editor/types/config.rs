@@ -13,6 +13,7 @@ pub struct EditorConfig {
     pub map_size: UVec2,
     pub save_path: String,
     pub tileset_import_dir: String,
+    pub show_grid: bool,
 }
 
 impl Default for EditorConfig {
@@ -25,6 +26,7 @@ impl Default for EditorConfig {
                 .to_string_lossy()
                 .to_string(),
             tileset_import_dir: "tilesets".to_string(),
+            show_grid: true,
         }
     }
 }

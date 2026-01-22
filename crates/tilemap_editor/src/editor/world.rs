@@ -52,6 +52,7 @@ pub use paste_apply::paste_with_mouse;
 pub use paste_preview::update_paste_preview;
 pub use paste_transform::paste_transform_shortcuts;
 pub use render_sync::{apply_map_to_entities, refresh_map_on_tileset_runtime_change};
+pub use render_sync::sync_layer_visibility_on_layer_data_change;
 pub use selection_move::selection_move_with_mouse;
 pub use tools::{fill_with_mouse, paint_with_mouse, rect_with_mouse};
 

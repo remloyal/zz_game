@@ -53,14 +53,16 @@ pub fn draw_canvas_helpers(
     let grid_color = Color::srgba(1.0, 1.0, 1.0, 0.12);
     let border_color = Color::srgba(1.0, 1.0, 1.0, 0.30);
 
-    // 网格线
-    for x in 0..=map_w {
-        let x_pos = x as f32 * tile_w;
-        gizmos.line_2d(Vec2::new(x_pos, 0.0), Vec2::new(x_pos, height_px), grid_color);
-    }
-    for y in 0..=map_h {
-        let y_pos = y as f32 * tile_h;
-        gizmos.line_2d(Vec2::new(0.0, y_pos), Vec2::new(width_px, y_pos), grid_color);
+    if config.show_grid {
+        // 网格线
+        for x in 0..=map_w {
+            let x_pos = x as f32 * tile_w;
+            gizmos.line_2d(Vec2::new(x_pos, 0.0), Vec2::new(x_pos, height_px), grid_color);
+        }
+        for y in 0..=map_h {
+            let y_pos = y as f32 * tile_h;
+            gizmos.line_2d(Vec2::new(0.0, y_pos), Vec2::new(width_px, y_pos), grid_color);
+        }
     }
 
     // 边界加粗（用更亮的颜色再画一遍）

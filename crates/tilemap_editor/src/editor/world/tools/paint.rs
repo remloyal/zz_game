@@ -62,6 +62,24 @@ pub fn paint_with_mouse(
         return;
     };
 
+    let layer = layer_state.active.min(map.layers.saturating_sub(1));
+    let layer_locked = map
+        .layer_data
+        .get(layer as usize)
+        .map(|d| d.locked)
+        .unwrap_or(false);
+    let layer_visible = map
+        .layer_data
+        .get(layer as usize)
+        .map(|d| d.visible)
+        .unwrap_or(true);
+    if layer_locked {
+        // 若当前正在 stroke 中，直接终止（不提交）。
+        stroke.active = false;
+        stroke.changes.clear();
+        return;
+    }
+
     let left_down = buttons.pressed(MouseButton::Left);
     let left_start = buttons.just_pressed(MouseButton::Left);
     let left_end = buttons.just_released(MouseButton::Left);
@@ -106,7 +124,6 @@ pub fn paint_with_mouse(
     };
     let (x, y) = (pos.x, pos.y);
 
-    let layer = layer_state.active.min(map.layers.saturating_sub(1));
     let idx = map.idx_layer(layer, x, y);
     let entity_idx = tile_entities.idx_layer(layer, x, y);
     if idx >= map.tiles.len() || entity_idx >= tile_entities.entities.len() {
@@ -143,6 +160,9 @@ pub fn paint_with_mouse(
     // 局部刷新渲染（单格），避免每帧全量 apply
     if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
         apply_tile_visual(&runtime, &desired, &mut sprite, &mut tf, &mut vis, &config);
+        if !layer_visible {
+            *vis = Visibility::Hidden;
+        }
     }
 }
 

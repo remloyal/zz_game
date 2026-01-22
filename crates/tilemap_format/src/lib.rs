@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use tilemap_core::{TileMapData, TileRef, DEFAULT_LAYER_COUNT};
+use tilemap_core::{LayerData, TileMapData, TileRef, DEFAULT_LAYER_COUNT};
 
 #[derive(Serialize, Deserialize)]
 struct MapFileV1 {
@@ -26,6 +26,8 @@ struct MapFileV3<TTileset> {
     height: u32,
     /// 图层数量。tiles 按 layer0..layerN 的顺序扁平存储。
     layers: u32,
+    #[serde(default)]
+    layer_data: Vec<LayerData>,
     /// 地图所需 tileset 列表（用于跨机器拷贝后自动回显渲染）
     tilesets: Vec<TTileset>,
     tiles: Vec<Option<TileRef>>,
@@ -39,6 +41,7 @@ pub fn encode_map_ron_v3<TTileset: Serialize>(
         width: map.width,
         height: map.height,
         layers: map.layers.max(1),
+        layer_data: map.layer_data.clone(),
         tilesets,
         tiles: map.tiles.clone(),
     };
@@ -53,6 +56,20 @@ where
     // 最新版本：V3（含 layers）
     if let Ok(v3) = ron::from_str::<MapFileV3<TTileset>>(text) {
         let mut map = TileMapData::new_with_layers(v3.width, v3.height, v3.layers.max(DEFAULT_LAYER_COUNT));
+        // 如果读取的 map 中已有 layer_data（新存的文件），直接覆盖；否则 new_with_layers 会创建默认值
+        if !v3.layer_data.is_empty() {
+             map.layer_data = v3.layer_data;
+             // 确保 layer_data 长度足够
+             if map.layer_data.len() < map.layers as usize {
+                 for i in map.layer_data.len()..map.layers as usize {
+                    map.layer_data.push(LayerData {
+                        name: format!("Layer {}", i + 1),
+                        visible: true,
+                        locked: false,
+                    });
+                }
+             }
+        }
         let want_len = map.tiles.len();
         let copy_len = want_len.min(v3.tiles.len());
         map.tiles[..copy_len].clone_from_slice(&v3.tiles[..copy_len]);

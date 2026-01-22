@@ -21,7 +21,8 @@ pub fn spawn_map_entities_with_layers(
 	let mut entities = Vec::with_capacity((width * height * layers) as usize);
 
 	for layer in 0..layers {
-		let z = layer as f32 * 0.1;
+		// 让不同 layer 的深度差更明显，避免某些情况下排序/精度导致的“像是被覆盖”。
+		let z = layer as f32 * 10.0;
 		for y in 0..height {
 			for x in 0..width {
 				let world_x = (x as f32 + 0.5) * tile_w;

@@ -50,6 +50,9 @@ pub fn action_button_click(
     };
 
     match requested {
+        ActionKind::ToggleGrid => {
+            config.show_grid = !config.show_grid;
+        }
         ActionKind::OpenTileset => {
             open_tileset_impl(&asset_server, &mut config, &mut lib, &mut tileset_loading);
             save_tileset_library(&lib);

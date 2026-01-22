@@ -71,6 +71,21 @@ pub fn paste_with_mouse(params: PasteWithMouseParams) {
     let Some(tile_entities) = tile_entities else {
         return;
     };
+
+    let layer = layer_state.active.min(map.layers.saturating_sub(1));
+    let layer_locked = map
+        .layer_data
+        .get(layer as usize)
+        .map(|d| d.locked)
+        .unwrap_or(false);
+    let layer_visible = map
+        .layer_data
+        .get(layer as usize)
+        .map(|d| d.visible)
+        .unwrap_or(true);
+    if layer_locked {
+        return;
+    }
     let Ok(window) = windows.single() else {
         return;
     };
@@ -102,7 +117,6 @@ pub fn paste_with_mouse(params: PasteWithMouseParams) {
     );
 
     let mut cmd = EditCommand::default();
-    let layer = layer_state.active.min(map.layers.saturating_sub(1));
     let (pw, ph) = paste_dims(&clipboard, &paste);
     let mut attempted = 0u32;
     let mut oob = 0u32;
@@ -197,6 +211,9 @@ pub fn paste_with_mouse(params: PasteWithMouseParams) {
                 }
             }
             apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
+            if !layer_visible {
+                *vis = Visibility::Hidden;
+            }
         }
     }
 

@@ -25,6 +25,24 @@ pub struct TileRef {
     pub flip_y: bool,
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub struct LayerData {
+    pub name: String,
+    pub visible: bool,
+    pub locked: bool,
+}
+
+impl Default for LayerData {
+    fn default() -> Self {
+        Self {
+            name: "Layer".to_string(),
+            visible: true,
+            locked: false,
+        }
+    }
+}
+
 pub const DEFAULT_LAYER_COUNT: u32 = 2;
 
 #[cfg_attr(feature = "bevy", derive(Resource))]
@@ -36,6 +54,8 @@ pub struct TileMapData {
     /// 图层数量。tiles 按 layer0..layerN 的顺序扁平存储。
     #[cfg_attr(feature = "serde", serde(default = "default_layers"))]
     pub layers: u32,
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub layer_data: Vec<LayerData>,
     pub tiles: Vec<Option<TileRef>>,
 }
 
@@ -50,10 +70,19 @@ impl TileMapData {
 
     pub fn new_with_layers(width: u32, height: u32, layers: u32) -> Self {
         let layers = layers.max(1);
+        let mut layer_data = Vec::with_capacity(layers as usize);
+        for i in 0..layers {
+            layer_data.push(LayerData {
+                name: format!("Layer {}", i + 1),
+                visible: true,
+                locked: false,
+            });
+        }
         Self {
             width,
             height,
             layers,
+            layer_data,
             tiles: vec![None; (width * height * layers) as usize],
         }
     }
@@ -75,10 +104,28 @@ impl TileMapData {
     pub fn ensure_layers(&mut self, layers: u32) {
         let layers = layers.max(1);
         if self.layers >= layers {
+            // 如果层数减少？目前不支持减少层数丢弃数据，此处暂不处理
+            // 但如果 layer_data 缺失（例如从旧数据加载），需要补齐
+            if self.layer_data.len() < self.layers as usize {
+                for i in self.layer_data.len()..self.layers as usize {
+                    self.layer_data.push(LayerData {
+                        name: format!("Layer {}", i + 1),
+                        visible: true,
+                        locked: false,
+                    });
+                }
+            }
             return;
         }
         let len = self.layer_len();
         self.tiles.resize(len * layers as usize, None);
+        for i in self.layers..layers {
+             self.layer_data.push(LayerData {
+                name: format!("Layer {}", i + 1),
+                visible: true,
+                locked: false,
+            });
+        }
         self.layers = layers;
     }
 
