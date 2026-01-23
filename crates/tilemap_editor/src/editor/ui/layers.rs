@@ -2,8 +2,8 @@ use bevy::prelude::*;
 
 use crate::editor::{UI_BUTTON, UI_HIGHLIGHT};
 use crate::editor::types::{
-	LayerActiveLabel, LayerActiveVisLabel, LayerActiveVisToggleButton, LayerNextButton,
-	LayerPrevButton, LayerState, TileMapData,
+    LayerActiveLabel, LayerActiveLockLabel, LayerActiveLockToggleButton, LayerActiveVisLabel,
+    LayerActiveVisToggleButton, LayerNextButton, LayerPrevButton, LayerState, TileMapData,
 };
 
 /// 右上角：上一层/下一层按钮。
@@ -17,6 +17,7 @@ pub fn layer_topbar_buttons(
             With<LayerPrevButton>,
             Without<LayerNextButton>,
             Without<LayerActiveVisToggleButton>,
+            Without<LayerActiveLockToggleButton>,
         ),
     >,
     mut next_q: Query<
@@ -26,6 +27,7 @@ pub fn layer_topbar_buttons(
             With<LayerNextButton>,
             Without<LayerPrevButton>,
             Without<LayerActiveVisToggleButton>,
+            Without<LayerActiveLockToggleButton>,
         ),
     >,
     mut vis_q: Query<
@@ -35,6 +37,17 @@ pub fn layer_topbar_buttons(
             With<LayerActiveVisToggleButton>,
             Without<LayerPrevButton>,
             Without<LayerNextButton>,
+            Without<LayerActiveLockToggleButton>,
+        ),
+    >,
+    mut lock_q: Query<
+        (&Interaction, &mut BackgroundColor),
+        (
+            Changed<Interaction>,
+            With<LayerActiveLockToggleButton>,
+            Without<LayerPrevButton>,
+            Without<LayerNextButton>,
+            Without<LayerActiveVisToggleButton>,
         ),
     >,
 ) {
@@ -112,21 +125,88 @@ pub fn layer_topbar_buttons(
             }
         }
     }
+
+    // 当前层锁定切换
+    for (interaction, mut bg) in lock_q.iter_mut() {
+        match *interaction {
+            Interaction::Pressed => {
+                *bg = BackgroundColor(UI_HIGHLIGHT);
+
+                if let Some(map) = map.as_mut() {
+                    let layers = map.layers.max(1);
+                    map.ensure_layers(layers);
+
+                    let active = layer_state.active.min(layers.saturating_sub(1));
+                    layer_state.active = active;
+                    if let Some(d) = map.layer_data.get_mut(active as usize) {
+                        d.locked = !d.locked;
+                    }
+                }
+            }
+            Interaction::Hovered => {
+                *bg = BackgroundColor(UI_HIGHLIGHT);
+            }
+            Interaction::None => {
+                let locked = map
+                    .as_deref()
+                    .and_then(|m| m.layer_data.get(layer_state.active as usize))
+                    .map(|d| d.locked)
+                    .unwrap_or(false);
+                *bg = if locked {
+                    BackgroundColor(Color::srgba(0.8, 0.2, 0.2, 0.8))
+                } else {
+                    BackgroundColor(Color::srgba(0.2, 0.2, 0.2, 0.8))
+                };
+            }
+        }
+    }
 }
 
 /// 右上角：当前层标签文本。
 pub fn update_layer_topbar_label(
     mut layer_state: ResMut<LayerState>,
     map: Option<Res<TileMapData>>,
-    mut q: Query<&mut Text, (With<LayerActiveLabel>, Without<LayerActiveVisLabel>)>,
-    mut vis_label_q: Query<&mut Text, (With<LayerActiveVisLabel>, Without<LayerActiveLabel>)>,
-    mut vis_btn_q: Query<(&Interaction, &mut BackgroundColor), With<LayerActiveVisToggleButton>>,
+    mut q: Query<
+        &mut Text,
+        (
+            With<LayerActiveLabel>,
+            Without<LayerActiveVisLabel>,
+            Without<LayerActiveLockLabel>,
+        ),
+    >,
+    mut vis_label_q: Query<
+        &mut Text,
+        (
+            With<LayerActiveVisLabel>,
+            Without<LayerActiveLabel>,
+            Without<LayerActiveLockLabel>,
+        ),
+    >,
+    mut vis_btn_q: Query<
+        (&Interaction, &mut BackgroundColor),
+        (With<LayerActiveVisToggleButton>, Without<LayerActiveLockToggleButton>),
+    >,
+    mut lock_label_q: Query<
+        &mut Text,
+        (
+            With<LayerActiveLockLabel>,
+            Without<LayerActiveLabel>,
+            Without<LayerActiveVisLabel>,
+        ),
+    >,
+    mut lock_btn_q: Query<
+        (&Interaction, &mut BackgroundColor),
+        (With<LayerActiveLockToggleButton>, Without<LayerActiveVisToggleButton>),
+    >,
 ) {
     let Some(map) = map.as_deref() else {
         for mut t in q.iter_mut() {
             *t = Text::new("-/-");
         }
         for mut t in vis_label_q.iter_mut() {
+            *t = Text::new("-");
+        }
+        for mut t in lock_label_q.iter_mut() {
             *t = Text::new("-");
         }
         return;
@@ -173,11 +253,27 @@ pub fn update_layer_topbar_label(
         *t = Text::new(vis_text);
     }
 
+    // 悬浮按钮：同步当前层锁定显示
+    let lock_text = if locked { "锁" } else { "解" };
+    for mut t in lock_label_q.iter_mut() {
+        *t = Text::new(lock_text);
+    }
+
     // 仅在 Interaction::None 时刷新“正常态颜色”，避免覆盖 hover 高亮
     for (interaction, mut bg) in vis_btn_q.iter_mut() {
         if *interaction == Interaction::None {
             *bg = if visible {
                 BackgroundColor(Color::srgba(0.2, 0.8, 0.2, 0.8))
+            } else {
+                BackgroundColor(Color::srgba(0.2, 0.2, 0.2, 0.8))
+            };
+        }
+    }
+
+    for (interaction, mut bg) in lock_btn_q.iter_mut() {
+        if *interaction == Interaction::None {
+            *bg = if locked {
+                BackgroundColor(Color::srgba(0.8, 0.2, 0.2, 0.8))
             } else {
                 BackgroundColor(Color::srgba(0.2, 0.2, 0.2, 0.8))
             };

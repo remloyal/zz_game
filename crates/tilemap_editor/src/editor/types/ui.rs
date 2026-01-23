@@ -175,3 +175,9 @@ pub struct LayerActiveVisToggleButton;
 
 #[derive(Component)]
 pub struct LayerActiveVisLabel;
+
+#[derive(Component)]
+pub struct LayerActiveLockToggleButton;
+
+#[derive(Component)]
+pub struct LayerActiveLockLabel;

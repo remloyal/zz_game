@@ -44,6 +44,7 @@ pub use undo::{CellChange, EditCommand, UndoStack};
 pub use ui::{
     ActionButton, ActionKind, CanvasRoot, HudText,
     LayerPrevButton, LayerNextButton, LayerActiveLabel, LayerActiveVisLabel, LayerActiveVisToggleButton,
+    LayerActiveLockLabel, LayerActiveLockToggleButton,
     MapSizeApplyButton, MapSizeFocus, MapSizeHeightField,
     MapSizeHeightText, MapSizeInput, MapSizeWidthField, MapSizeWidthText, PaletteRoot, PaletteScroll,
     PaletteNextPageButton, PalettePageLabel, PalettePrevPageButton, PaletteTileButton, TilesetActiveLabel,

@@ -6,6 +6,7 @@ use crate::editor::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX, UI_BUTTON, UI_P
 use crate::editor::types::{
 	ActionButton, ActionKind, CanvasRoot, HudText,
 		LayerPrevButton, LayerNextButton, LayerActiveLabel, LayerActiveVisLabel, LayerActiveVisToggleButton,
+		LayerActiveLockLabel, LayerActiveLockToggleButton,
 		BrushSizeButton,
 	MapSizeApplyButton, MapSizeHeightField, MapSizeHeightText, MapSizeWidthField, MapSizeWidthText,
 	PaletteNextPageButton, PalettePageLabel, PalettePrevPageButton, PaletteRoot, PaletteScroll,
@@ -394,6 +395,31 @@ fn spawn_ui_root(commands: &mut Commands) {
 			},
 			TextColor(Color::WHITE),
 		));
+
+		// 当前层锁定
+		p.spawn((
+			Button,
+			Node {
+				height: Val::Px(28.0),
+				padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+				align_items: AlignItems::Center,
+				justify_content: JustifyContent::Center,
+				..default()
+			},
+			BackgroundColor(UI_BUTTON),
+			LayerActiveLockToggleButton,
+		))
+		.with_children(|p| {
+			p.spawn((
+				Text::new("解"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+				LayerActiveLockLabel,
+			));
+		});
 		p.spawn((
 			Text::new("全部"),
 			TextFont {
