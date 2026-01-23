@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::editor::types::{
     CellChange, EditCommand, EditorConfig, EditorState, MapSizeFocus, MapSizeInput, TileEntities,
-    TileMapData, TilesetLibrary, TilesetRuntime, ToolKind, ToolState, UndoStack,
+    BrushSettings, TileMapData, TilesetLibrary, TilesetRuntime, ToolKind, ToolState, UndoStack,
 };
 
 use super::apply_map_to_entities;
@@ -60,11 +60,24 @@ pub fn tool_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     input: Res<MapSizeInput>,
     mut tools: ResMut<ToolState>,
+    mut brush: ResMut<BrushSettings>,
 ) {
     // 正在输入地图尺寸时，数字键留给输入框。
     if input.focus != MapSizeFocus::None {
         return;
     }
+
+	let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+	if shift {
+		if keys.just_pressed(KeyCode::Digit1) || keys.just_pressed(KeyCode::Numpad1) {
+			brush.size = 1;
+		} else if keys.just_pressed(KeyCode::Digit2) || keys.just_pressed(KeyCode::Numpad2) {
+			brush.size = 2;
+		} else if keys.just_pressed(KeyCode::Digit3) || keys.just_pressed(KeyCode::Numpad3) {
+			brush.size = 3;
+		}
+		return;
+	}
 
     if keys.just_pressed(KeyCode::Digit1) || keys.just_pressed(KeyCode::Numpad1) {
         tools.tool = ToolKind::Pencil;

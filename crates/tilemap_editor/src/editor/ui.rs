@@ -29,7 +29,10 @@ pub use map_size::{
 	sync_map_size_input_from_config, update_map_size_field_text,
 };
 
-pub use palette::{build_palette_when_ready, palette_scroll_wheel, palette_tile_click};
+pub use palette::{
+	build_palette_when_ready, palette_page_buttons, palette_scroll_wheel, palette_tile_click,
+	update_palette_page_label,
+};
 pub use root::setup_ui;
 pub use tileset_menu::{
 	rebuild_tileset_menu_when_needed, tileset_category_cycle_click, tileset_menu_item_click,
@@ -37,5 +40,6 @@ pub use tileset_menu::{
 	update_tileset_category_label,
 };
 pub use tools::{
-	shift_mode_button_click, sync_tool_button_styles, tool_button_click, update_shift_mode_label,
+	brush_size_button_click, shift_mode_button_click, sync_brush_size_button_styles,
+	sync_tool_button_styles, tool_button_click, update_shift_mode_label,
 };

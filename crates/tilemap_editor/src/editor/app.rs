@@ -6,8 +6,8 @@ use super::{
 	paths::workspace_assets_dir,
 	tileset,
 	types::{
-		Clipboard, ContextMenuCommand, ContextMenuState, EditorConfig, EditorState, LayerState,
-		MapSizeInput, PanState, PastePreview, PasteState, SelectionState, ShiftMapSettings,
+		BrushSettings, Clipboard, ContextMenuCommand, ContextMenuState, EditorConfig, EditorState,
+		LayerState, MapSizeInput, PanState, PastePreview, PasteState, SelectionState, ShiftMapSettings,
 		TilesetLibrary, TilesetLoading, TilesetRuntime, ToolState, UiState, UndoStack,
 	},
 	ui,
@@ -47,6 +47,7 @@ pub fn run() {
 		.init_resource::<MapSizeInput>()
 		.init_resource::<UiState>()
 		.init_resource::<ToolState>()
+		.init_resource::<BrushSettings>()
 		.init_resource::<Clipboard>()
 		.init_resource::<ContextMenuState>()
 		.init_resource::<ContextMenuCommand>()
@@ -90,6 +91,8 @@ pub fn run() {
 							ui::rebuild_tileset_menu_when_needed,
 							ui::tileset_menu_item_click,
 							ui::build_palette_when_ready,
+							ui::palette_page_buttons,
+							ui::update_palette_page_label,
 							ui::palette_tile_click,
 							ui::palette_scroll_wheel,
 						)
@@ -97,6 +100,8 @@ pub fn run() {
 						(
 							ui::tool_button_click,
 							ui::sync_tool_button_styles,
+						ui::brush_size_button_click,
+						ui::sync_brush_size_button_styles,
 							ui::shift_mode_button_click,
 							ui::update_shift_mode_label,
 						)

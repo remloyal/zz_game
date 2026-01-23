@@ -24,6 +24,18 @@ pub struct ToolState {
     pub return_after_paste: Option<ToolKind>,
 }
 
+/// 笔刷设置（P1）：目前仅支持方形尺寸 1/2/3。
+#[derive(Resource, Clone, Copy)]
+pub struct BrushSettings {
+    pub size: u32,
+}
+
+impl Default for BrushSettings {
+    fn default() -> Self {
+        Self { size: 1 }
+    }
+}
+
 impl Default for ToolState {
     fn default() -> Self {
         Self {

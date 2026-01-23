@@ -268,7 +268,7 @@ fn tile_world_center(x: u32, y: u32, tile_size: UVec2, z: f32) -> Vec3 {
     Vec3::new(world_x, world_y, z)
 }
 
-fn cursor_tile_pos(
+pub(crate) fn cursor_tile_pos(
     window: &Window,
     camera: &Camera,
     camera_transform: &GlobalTransform,

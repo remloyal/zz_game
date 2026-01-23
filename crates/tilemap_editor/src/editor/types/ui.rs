@@ -68,14 +68,54 @@ pub enum ActionKind {
 #[derive(Component)]
 pub struct ActionButton(pub ActionKind);
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct UiState {
     pub built_for_tileset_path: String,
+    pub palette_page: u32,
+    pub palette_page_size: u32,
+    pub built_palette_page: u32,
     pub tileset_menu_open: bool,
     pub built_tileset_menu_count: usize,
     pub built_tileset_menu_active_id: String,
     pub built_tileset_menu_category: String,
 }
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            built_for_tileset_path: String::new(),
+            palette_page: 0,
+            palette_page_size: 256,
+            built_palette_page: u32::MAX,
+            tileset_menu_open: false,
+            built_tileset_menu_count: 0,
+            built_tileset_menu_active_id: String::new(),
+            built_tileset_menu_category: String::new(),
+        }
+    }
+}
+
+impl UiState {
+	pub fn palette_page_size(&self) -> u32 {
+		self.palette_page_size.max(1)
+	}
+}
+
+// --- Palette 分页控件 ---
+
+#[derive(Component)]
+pub struct PalettePrevPageButton;
+
+#[derive(Component)]
+pub struct PaletteNextPageButton;
+
+#[derive(Component)]
+pub struct PalettePageLabel;
+
+// --- 笔刷尺寸控件 ---
+
+#[derive(Component, Clone, Copy)]
+pub struct BrushSizeButton(pub u32);
 
 #[derive(Component)]
 pub struct MapSizeWidthField;

@@ -1,10 +1,11 @@
 //! 右上角 HUD 文案。
 
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 
 use crate::editor::types::{
 	Clipboard, EditorConfig, EditorState, HudText, PasteState, TileMapData, TilesetLibrary,
-	TilesetRuntime, ToolKind, ToolState,
+	BrushSettings, TilesetRuntime, ToolKind, ToolState, WorldCamera,
 };
 
 /// 更新右上角 HUD（选中 tile、地图路径、图层/工具/剪贴板等状态）。
@@ -15,10 +16,13 @@ pub fn update_hud_text(
     lib: Res<TilesetLibrary>,
     runtime: Res<TilesetRuntime>,
     tools: Res<ToolState>,
+	brush: Res<BrushSettings>,
     layer_state: Res<crate::editor::types::LayerState>,
     map: Option<Res<TileMapData>>,
     clipboard: Res<Clipboard>,
     paste: Res<PasteState>,
+	windows: Query<&Window, With<PrimaryWindow>>,
+	camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
     hud_q: Query<Entity, With<HudText>>,
 ) {
 	let Some(hud_entity) = hud_q.iter().next() else {
@@ -47,15 +51,37 @@ pub fn update_hud_text(
 	let mut msg = if tile_count == 0 {
 		"未选择 tileset：按 O 或点左上角【打开】导入".to_string()
 	} else {
+		let (map_w, map_h) = map
+			.as_deref()
+			.map(|m| (m.width, m.height))
+			.unwrap_or((config.map_size.x, config.map_size.y));
+
+		let cursor_tile = (|| {
+			let Ok(window) = windows.single() else {
+				return None;
+			};
+			let Ok((camera, camera_transform)) = camera_q.single() else {
+				return None;
+			};
+			crate::editor::world::cursor_tile_pos(window, camera, camera_transform, &config, map_w, map_h)
+		})();
+		let cursor_line = match cursor_tile {
+			Some(p) => format!("鼠标: ({}, {})", p.x, p.y),
+			None => "鼠标: -".to_string(),
+		};
+
 		format!(
-			"选中 tile: {}\n地图: {} ({}x{})\n图层: {}/{} ({})\n图块: {}x{} | tiles: {}",
+			"选中 tile: {}\n地图: {} ({}x{})\n{}\n图层: {}/{} ({})\n笔刷: {}x{}\n图块: {}x{} | tiles: {}",
 			state.selected_tile,
 			config.save_path,
 			config.map_size.x,
 			config.map_size.y,
+			cursor_line,
 			active_layer + 1,
 			total_layers,
 			layer_name,
+			brush.size,
+			brush.size,
 			config.tile_size.x,
 			config.tile_size.y,
 			tile_count

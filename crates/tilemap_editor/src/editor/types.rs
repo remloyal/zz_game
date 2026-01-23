@@ -37,7 +37,8 @@ pub use tileset::{
     TilesetRuntimeEntry,
 };
 pub use tools::{
-    ShiftMapMode, ShiftMapSettings, ShiftModeButton, ShiftModeLabel, ToolButton, ToolKind, ToolState,
+    BrushSettings, ShiftMapMode, ShiftMapSettings, ShiftModeButton, ShiftModeLabel, ToolButton, ToolKind,
+    ToolState,
 };
 pub use undo::{CellChange, EditCommand, UndoStack};
 pub use ui::{
@@ -45,6 +46,8 @@ pub use ui::{
     LayerPrevButton, LayerNextButton, LayerActiveLabel, LayerActiveVisLabel, LayerActiveVisToggleButton,
     MapSizeApplyButton, MapSizeFocus, MapSizeHeightField,
     MapSizeHeightText, MapSizeInput, MapSizeWidthField, MapSizeWidthText, PaletteRoot, PaletteScroll,
-    PaletteTileButton, TilesetActiveLabel, TilesetBar, TilesetCategoryCycleButton, TilesetCategoryLabel,
+    PaletteNextPageButton, PalettePageLabel, PalettePrevPageButton, PaletteTileButton, TilesetActiveLabel,
+    TilesetBar, TilesetCategoryCycleButton, TilesetCategoryLabel,
     TilesetMenuRoot, TilesetSelectItem, TilesetToggleButton, UiFont, UiRoot, UiState,
+    BrushSizeButton,
 };

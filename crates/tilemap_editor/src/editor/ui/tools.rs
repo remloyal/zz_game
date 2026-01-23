@@ -4,8 +4,8 @@ use bevy::prelude::*;
 
 use crate::editor::{UI_BUTTON, UI_BUTTON_HOVER, UI_BUTTON_PRESS, UI_HIGHLIGHT};
 use crate::editor::types::{
-    PasteState, ShiftMapMode, ShiftMapSettings, ShiftModeButton, ShiftModeLabel, ToolButton,
-    ToolKind, ToolState,
+	BrushSettings, BrushSizeButton, PasteState, ShiftMapMode, ShiftMapSettings, ShiftModeButton,
+	ShiftModeLabel, ToolButton, ToolKind, ToolState,
 };
 
 /// 工具按钮点击：切换当前工具；进入粘贴工具时重置粘贴变换。
@@ -49,6 +49,49 @@ pub fn sync_tool_button_styles(
 			continue;
 		}
 
+		*bg = match *interaction {
+			Interaction::Pressed => BackgroundColor(UI_BUTTON_PRESS),
+			Interaction::Hovered => BackgroundColor(UI_BUTTON_HOVER),
+			Interaction::None => BackgroundColor(UI_BUTTON),
+		};
+	}
+}
+
+/// 笔刷尺寸按钮点击：1x1/2x2/3x3。
+pub fn brush_size_button_click(
+	mut brush: ResMut<BrushSettings>,
+	mut q: Query<(&Interaction, &BrushSizeButton, &mut BackgroundColor), Changed<Interaction>>,
+) {
+	let mut picked: Option<u32> = None;
+	for (interaction, btn, mut bg) in q.iter_mut() {
+		match *interaction {
+			Interaction::Pressed => {
+				picked = Some(btn.0);
+				*bg = BackgroundColor(UI_BUTTON_PRESS);
+			}
+			Interaction::Hovered => {
+				*bg = BackgroundColor(UI_BUTTON_HOVER);
+			}
+			Interaction::None => {
+				*bg = BackgroundColor(UI_BUTTON);
+			}
+		}
+	}
+	if let Some(size) = picked {
+		brush.size = size.clamp(1, 3);
+	}
+}
+
+/// 笔刷尺寸按钮样式同步：高亮当前尺寸。
+pub fn sync_brush_size_button_styles(
+	brush: Res<BrushSettings>,
+	mut q: Query<(&BrushSizeButton, &Interaction, &mut BackgroundColor)>,
+) {
+	for (btn, interaction, mut bg) in q.iter_mut() {
+		if btn.0 == brush.size {
+			*bg = BackgroundColor(UI_HIGHLIGHT);
+			continue;
+		}
 		*bg = match *interaction {
 			Interaction::Pressed => BackgroundColor(UI_BUTTON_PRESS),
 			Interaction::Hovered => BackgroundColor(UI_BUTTON_HOVER),

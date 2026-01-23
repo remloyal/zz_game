@@ -1,68 +1,76 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy::ecs::system::SystemParam;
 
 use std::collections::HashMap;
 
 use crate::editor::types::{
     CellChange, ContextMenuState, EditCommand, EditorConfig, EditorState, LayerState, TileEntities,
     TileMapData, TileRef, TilesetLibrary, TilesetRuntime, ToolKind, ToolState, UndoStack,
-    WorldCamera,
+    BrushSettings, WorldCamera,
 };
 
 use super::super::{apply_tile_visual, cursor_tile_pos};
 
+#[derive(SystemParam)]
+pub struct PaintWithMouseParams<'w, 's> {
+    pub buttons: Res<'w, ButtonInput<MouseButton>>,
+    pub keys: Res<'w, ButtonInput<KeyCode>>,
+    pub tools: Res<'w, ToolState>,
+    pub brush: Res<'w, BrushSettings>,
+    pub layer_state: Res<'w, LayerState>,
+    pub menu: Res<'w, ContextMenuState>,
+    pub windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    pub camera_q: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<WorldCamera>>,
+    pub config: Res<'w, EditorConfig>,
+    pub state: Res<'w, EditorState>,
+    pub lib: Res<'w, TilesetLibrary>,
+    pub runtime: Res<'w, TilesetRuntime>,
+    pub map: Option<ResMut<'w, TileMapData>>,
+    pub tile_entities: Option<Res<'w, TileEntities>>,
+    pub tiles_q:
+        Query<'w, 's, (&'static mut Sprite, &'static mut Transform, &'static mut Visibility)>,
+    pub undo: ResMut<'w, UndoStack>,
+}
+
 /// 鼠标绘制：左键绘制/擦除（右键保留给右键菜单）。
 pub fn paint_with_mouse(
-    buttons: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
-    tools: Res<ToolState>,
-    layer_state: Res<LayerState>,
-    menu: Res<ContextMenuState>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
-    config: Res<EditorConfig>,
-    state: Res<EditorState>,
-    lib: Res<TilesetLibrary>,
-    runtime: Res<TilesetRuntime>,
-    map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
-    mut undo: ResMut<UndoStack>,
+    mut p: PaintWithMouseParams,
     mut stroke: Local<StrokeState>,
 ) {
-    if tools.tool != ToolKind::Pencil && tools.tool != ToolKind::Eraser {
+    if p.tools.tool != ToolKind::Pencil && p.tools.tool != ToolKind::Eraser {
         return;
     }
-    if menu.open || menu.consume_left_click {
+    if p.menu.open || p.menu.consume_left_click {
         return;
     }
 
     // Alt + 拖拽用于“从任意工具框选”，避免与绘制冲突。
-    if keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight) {
+    if p.keys.pressed(KeyCode::AltLeft) || p.keys.pressed(KeyCode::AltRight) {
         return;
     }
 
     // Space 用于平移（Space + 左键拖拽），避免与绘制冲突。
-    if keys.pressed(KeyCode::Space) {
+    if p.keys.pressed(KeyCode::Space) {
         return;
     }
 
-    let active_id = if tools.tool == ToolKind::Pencil {
-        let Some(active_id) = lib.active_id.clone() else {
+    let active_id = if p.tools.tool == ToolKind::Pencil {
+        let Some(active_id) = p.lib.active_id.clone() else {
             return;
         };
         Some(active_id)
     } else {
         None
     };
-    let Some(mut map) = map else {
+    let Some(mut map) = p.map else {
         return;
     };
-    let Some(tile_entities) = tile_entities else {
+    let Some(tile_entities) = p.tile_entities else {
         return;
     };
 
-    let layer = layer_state.active.min(map.layers.saturating_sub(1));
+    let layer = p.layer_state.active.min(map.layers.saturating_sub(1));
     let layer_locked = map
         .layer_data
         .get(layer as usize)
@@ -80,32 +88,32 @@ pub fn paint_with_mouse(
         return;
     }
 
-    let left_down = buttons.pressed(MouseButton::Left);
-    let left_start = buttons.just_pressed(MouseButton::Left);
-    let left_end = buttons.just_released(MouseButton::Left);
+    let left_down = p.buttons.pressed(MouseButton::Left);
+    let left_start = p.buttons.just_pressed(MouseButton::Left);
+    let left_end = p.buttons.just_released(MouseButton::Left);
 
     // stroke 结束：提交为一个 undo 命令
     if stroke.active {
         let ended = left_end || !left_down;
         if ended {
             let cmd = stroke.take_command();
-            undo.push(cmd);
+            p.undo.push(cmd);
             stroke.active = false;
             return;
         }
     }
 
-    let Ok(window) = windows.single() else {
+    let Ok(window) = p.windows.single() else {
         return;
     };
-    let Ok((camera, camera_transform)) = camera_q.single() else {
+    let Ok((camera, camera_transform)) = p.camera_q.single() else {
         return;
     };
     let pos = cursor_tile_pos(
         window,
         camera,
         camera_transform,
-        &config,
+        &p.config,
         tile_entities.width,
         tile_entities.height,
     );
@@ -122,46 +130,54 @@ pub fn paint_with_mouse(
     let Some(pos) = pos else {
         return;
     };
-    let (x, y) = (pos.x, pos.y);
 
-    let idx = map.idx_layer(layer, x, y);
-    let entity_idx = tile_entities.idx_layer(layer, x, y);
-    if idx >= map.tiles.len() || entity_idx >= tile_entities.entities.len() {
-        return;
-    }
-    let entity = tile_entities.entities[entity_idx];
-
-    // 没有在绘制中
-    if !left_down {
-        return;
-    }
-
-    let desired: Option<TileRef> = if tools.tool == ToolKind::Eraser {
+    let desired: Option<TileRef> = if p.tools.tool == ToolKind::Eraser {
         None
     } else {
         Some(TileRef {
             tileset_id: active_id.clone().unwrap(),
-            index: state.selected_tile,
+            index: p.state.selected_tile,
             rot: 0,
             flip_x: false,
             flip_y: false,
         })
     };
 
-    if map.tiles[idx] == desired {
+    // 没有在绘制中
+    if !left_down {
         return;
     }
 
-    let before = map.tiles[idx].clone();
-    map.tiles[idx] = desired.clone();
+    let size = p.brush.size.clamp(1, 3);
+    for dy in 0..size {
+        for dx in 0..size {
+            let x = pos.x + dx;
+            let y = pos.y + dy;
+            if x >= map.width || y >= map.height {
+                continue;
+            }
+            let idx = map.idx_layer(layer, x, y);
+            let entity_idx = tile_entities.idx_layer(layer, x, y);
+            if idx >= map.tiles.len() || entity_idx >= tile_entities.entities.len() {
+                continue;
+            }
+            let entity = tile_entities.entities[entity_idx];
 
-    stroke.record_change(idx, before.clone(), desired.clone());
+            if map.tiles[idx] == desired {
+                continue;
+            }
 
-    // 局部刷新渲染（单格），避免每帧全量 apply
-    if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
-        apply_tile_visual(&runtime, &desired, &mut sprite, &mut tf, &mut vis, &config);
-        if !layer_visible {
-            *vis = Visibility::Hidden;
+            let before = map.tiles[idx].clone();
+            map.tiles[idx] = desired.clone();
+            stroke.record_change(idx, before.clone(), desired.clone());
+
+            // 局部刷新渲染（单格），避免每帧全量 apply
+            if let Ok((mut sprite, mut tf, mut vis)) = p.tiles_q.get_mut(entity) {
+                apply_tile_visual(&p.runtime, &desired, &mut sprite, &mut tf, &mut vis, &p.config);
+                if !layer_visible {
+                    *vis = Visibility::Hidden;
+                }
+            }
         }
     }
 }
