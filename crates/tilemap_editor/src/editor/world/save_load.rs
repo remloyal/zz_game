@@ -8,6 +8,7 @@ use crate::editor::types::{
     EditorConfig, TileEntities, TileMapData, TilesetLibrary, TilesetLoading, TilesetRuntime,
     UndoStack,
 };
+use crate::editor::util::despawn_silently;
 
 use super::apply_map_to_entities;
 
@@ -54,7 +55,7 @@ pub fn save_load_shortcuts(
         if needs_resize {
             if let Some(existing_tiles) = current_tile_entities {
                 for &e in &existing_tiles.entities {
-                    commands.entity(e).despawn();
+                    despawn_silently(&mut commands, e);
                 }
             }
             commands.remove_resource::<TileEntities>();

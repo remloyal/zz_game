@@ -55,6 +55,8 @@ pub enum ActionKind {
     SaveMap,
     LoadMap,
     NewMap,
+    Undo,
+    Redo,
     /// 切换地图尺寸（会重建格子实体）。
     SetMapSize { width: u32, height: u32 },
     /// 从文件导入地图（文件选择器）。
@@ -63,10 +65,41 @@ pub enum ActionKind {
     ExportMap,
     /// 切换网格显示。
     ToggleGrid,
+	/// Shift Map 模式 Blank <-> Wrap。
+	ToggleShiftMode,
 }
 
 #[derive(Component)]
 pub struct ActionButton(pub ActionKind);
+
+// --- 顶部菜单栏（分类 + 悬浮下拉） ---
+
+#[derive(Resource, Default)]
+pub struct MenuState {
+    pub open: Option<MenuId>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MenuId {
+    File,
+    Edit,
+    View,
+	Map,
+    Layer,
+    Help,
+}
+
+#[derive(Component, Clone, Copy)]
+pub struct MenuButton(pub MenuId);
+
+#[derive(Component, Clone, Copy)]
+pub struct MenuDropdown;
+
+#[derive(Component)]
+pub struct MenuBackdrop;
+
+#[derive(Component)]
+pub struct MenuItem;
 
 #[derive(Resource)]
 pub struct UiState {
@@ -74,6 +107,9 @@ pub struct UiState {
     pub palette_page: u32,
     pub palette_page_size: u32,
     pub built_palette_page: u32,
+    pub palette_tile_px: f32,
+    pub built_palette_tile_px: f32,
+    pub built_palette_filter: String,
     pub tileset_menu_open: bool,
     pub built_tileset_menu_count: usize,
     pub built_tileset_menu_active_id: String,
@@ -87,6 +123,9 @@ impl Default for UiState {
             palette_page: 0,
             palette_page_size: 256,
             built_palette_page: u32::MAX,
+            palette_tile_px: 40.0,
+            built_palette_tile_px: -1.0,
+            built_palette_filter: String::new(),
             tileset_menu_open: false,
             built_tileset_menu_count: 0,
             built_tileset_menu_active_id: String::new(),
@@ -98,6 +137,10 @@ impl Default for UiState {
 impl UiState {
 	pub fn palette_page_size(&self) -> u32 {
 		self.palette_page_size.max(1)
+	}
+
+	pub fn palette_tile_px(&self) -> f32 {
+		self.palette_tile_px.clamp(24.0, 96.0)
 	}
 }
 
@@ -111,6 +154,44 @@ pub struct PaletteNextPageButton;
 
 #[derive(Component)]
 pub struct PalettePageLabel;
+
+// --- Palette 缩略图缩放 ---
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PaletteZoomLevel {
+    Small,
+    Medium,
+    Large,
+}
+
+#[derive(Component, Clone, Copy)]
+pub struct PaletteZoomButton(pub PaletteZoomLevel);
+
+// --- Palette 搜索 ---
+
+#[derive(Component)]
+pub struct PaletteSearchField;
+
+#[derive(Component)]
+pub struct PaletteSearchText;
+
+#[derive(Component)]
+pub struct PaletteSearchClearButton;
+
+#[derive(Resource)]
+pub struct PaletteSearchInput {
+    pub buf: String,
+    pub focused: bool,
+}
+
+impl Default for PaletteSearchInput {
+    fn default() -> Self {
+        Self {
+            buf: String::new(),
+            focused: false,
+        }
+    }
+}
 
 // --- 笔刷尺寸控件 ---
 

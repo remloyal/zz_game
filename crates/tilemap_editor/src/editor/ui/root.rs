@@ -5,16 +5,20 @@ use bevy::prelude::*;
 use crate::editor::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX, UI_BUTTON, UI_PANEL};
 use crate::editor::types::{
 	ActionButton, ActionKind, CanvasRoot, HudText,
+	MenuButton, MenuId,
 		LayerPrevButton, LayerNextButton, LayerActiveLabel, LayerActiveVisLabel, LayerActiveVisToggleButton,
 		LayerActiveLockLabel, LayerActiveLockToggleButton,
 		BrushSizeButton,
 	MapSizeApplyButton, MapSizeHeightField, MapSizeHeightText, MapSizeWidthField, MapSizeWidthText,
 	PaletteNextPageButton, PalettePageLabel, PalettePrevPageButton, PaletteRoot, PaletteScroll,
+	PaletteSearchClearButton, PaletteSearchField, PaletteSearchText,
+	PaletteZoomButton, PaletteZoomLevel,
 	ShiftModeButton, ShiftModeLabel,
 	TilesetBar, TilesetCategoryCycleButton, TilesetCategoryLabel, TilesetMenuRoot, TilesetToggleButton,
 	ToolButton, ToolKind,
 	UiRoot,
 };
+use crate::editor::MENUBAR_HEIGHT_PX;
 
 /// UI 初始化：HUD + 左侧面板。
 pub fn setup_ui(mut commands: Commands) {
@@ -44,12 +48,70 @@ fn spawn_ui_root(commands: &mut Commands) {
 			Node {
 				width: Val::Percent(100.0),
 				height: Val::Percent(100.0),
-				flex_direction: FlexDirection::Row,
+				flex_direction: FlexDirection::Column,
 				..default()
 			},
 			// 重要：UI 画在世界之上。这里必须透明，否则会把世界渲染整块盖住。
 			BackgroundColor(Color::NONE),
 			UiRoot,
+		))
+		.id();
+
+	let menubar = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				height: Val::Px(MENUBAR_HEIGHT_PX),
+				flex_direction: FlexDirection::Row,
+				align_items: AlignItems::Center,
+				padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+				column_gap: Val::Px(6.0),
+				..default()
+			},
+			BackgroundColor(UI_PANEL),
+		))
+		.id();
+
+	commands.entity(menubar).with_children(|p| {
+		for (label, id) in [
+			("File", MenuId::File),
+			("Edit", MenuId::Edit),
+			("View", MenuId::View),
+			("Map", MenuId::Map),
+			("Layer", MenuId::Layer),
+			("Help", MenuId::Help),
+		] {
+			p.spawn((
+				Button,
+				Node {
+					height: Val::Px(24.0),
+					padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+					align_items: AlignItems::Center,
+					justify_content: JustifyContent::Center,
+					..default()
+				},
+				BackgroundColor(UI_BUTTON),
+				MenuButton(id),
+			))
+			.with_children(|p| {
+				p.spawn((
+					Text::new(label),
+					TextFont { font_size: 13.0, ..default() },
+					TextColor(Color::WHITE),
+				));
+			});
+		}
+	});
+
+	let main_row = commands
+		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				flex_grow: 1.0,
+				flex_direction: FlexDirection::Row,
+				..default()
+			},
+			BackgroundColor(Color::NONE),
 		))
 		.id();
 
@@ -82,150 +144,6 @@ fn spawn_ui_root(commands: &mut Commands) {
 		.id();
 
 	commands.entity(toolbar).with_children(|p| {
-		// 打开
-		p.spawn((
-			Button,
-			Node {
-				height: Val::Px(36.0),
-				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
-				..default()
-			},
-			BackgroundColor(UI_BUTTON),
-			ActionButton(ActionKind::OpenTileset),
-		))
-		.with_children(|p| {
-			p.spawn((
-				Text::new("打开(O)"),
-				TextFont {
-					font_size: 14.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-			));
-		});
-
-		// 新建
-		p.spawn((
-			Button,
-			Node {
-				height: Val::Px(36.0),
-				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
-				..default()
-			},
-			BackgroundColor(UI_BUTTON),
-			ActionButton(ActionKind::NewMap),
-		))
-		.with_children(|p| {
-			p.spawn((
-				Text::new("新建(R)"),
-				TextFont {
-					font_size: 14.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-			));
-		});
-
-		// 保存
-		p.spawn((
-			Button,
-			Node {
-				height: Val::Px(36.0),
-				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
-				..default()
-			},
-			BackgroundColor(UI_BUTTON),
-			ActionButton(ActionKind::SaveMap),
-		))
-		.with_children(|p| {
-			p.spawn((
-				Text::new("保存(S)"),
-				TextFont {
-					font_size: 14.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-			));
-		});
-
-		// 读取
-		p.spawn((
-			Button,
-			Node {
-				height: Val::Px(36.0),
-				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
-				..default()
-			},
-			BackgroundColor(UI_BUTTON),
-			ActionButton(ActionKind::LoadMap),
-		))
-		.with_children(|p| {
-			p.spawn((
-				Text::new("读取(L)"),
-				TextFont {
-					font_size: 14.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-			));
-		});
-
-		// 导入地图
-		p.spawn((
-			Button,
-			Node {
-				height: Val::Px(36.0),
-				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
-				..default()
-			},
-			BackgroundColor(UI_BUTTON),
-			ActionButton(ActionKind::ImportMap),
-		))
-		.with_children(|p| {
-			p.spawn((
-				Text::new("导入"),
-				TextFont {
-					font_size: 14.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-			));
-		});
-
-		// 导出地图
-		p.spawn((
-			Button,
-			Node {
-				height: Val::Px(36.0),
-				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
-				..default()
-			},
-			BackgroundColor(UI_BUTTON),
-			ActionButton(ActionKind::ExportMap),
-		))
-		.with_children(|p| {
-			p.spawn((
-				Text::new("导出"),
-				TextFont {
-					font_size: 14.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-			));
-		});
-
 		// --- 工具栏（参考 RM：铅笔/矩形/填充/选择） ---
 		p.spawn((
 			Button,
@@ -736,30 +654,6 @@ fn spawn_ui_root(commands: &mut Commands) {
 			));
 		});
 
-        // Toggle Grid
-        p.spawn((
-            Button,
-            Node {
-                height: Val::Px(36.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-            BackgroundColor(UI_BUTTON),
-            ActionButton(ActionKind::ToggleGrid),
-        ))
-        .with_children(|p| {
-             p.spawn((
-                Text::new("网格"),
-                TextFont {
-                    font_size: 13.0,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-            ));
-        });
-
 		// Shift Map 模式：空白 / 环绕
 		p.spawn((
 			Text::new("Shift:"),
@@ -909,9 +803,21 @@ fn spawn_ui_root(commands: &mut Commands) {
 	commands.entity(left_panel).add_child(toolbar);
 	commands.entity(left_panel).add_child(tileset_bar);
 
-	// palette 分页条
+	// palette 顶部条（分页 + 缩略图缩放 + 搜索）
 	let palette_pager = commands
 		.spawn((
+			Node {
+				width: Val::Percent(100.0),
+				flex_direction: FlexDirection::Column,
+				row_gap: Val::Px(6.0),
+				..default()
+			},
+			BackgroundColor(Color::NONE),
+		))
+		.id();
+	commands.entity(palette_pager).with_children(|p| {
+		// Row 1: 分页 + 缩略图缩放
+		p.spawn((
 			Node {
 				width: Val::Percent(100.0),
 				height: Val::Px(28.0),
@@ -922,73 +828,181 @@ fn spawn_ui_root(commands: &mut Commands) {
 			},
 			BackgroundColor(Color::NONE),
 		))
-		.id();
-	commands.entity(palette_pager).with_children(|p| {
-		p.spawn((
-			Text::new("Palette:"),
-			TextFont {
-				font_size: 13.0,
-				..default()
-			},
-			TextColor(Color::WHITE),
-		));
-		p.spawn((
-			Button,
-			Node {
-				height: Val::Px(24.0),
-				padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
-				..default()
-			},
-			BackgroundColor(UI_BUTTON),
-			PalettePrevPageButton,
-		))
 		.with_children(|p| {
 			p.spawn((
-				Text::new("←"),
+				Text::new("Palette:"),
 				TextFont {
 					font_size: 13.0,
 					..default()
 				},
 				TextColor(Color::WHITE),
 			));
+			p.spawn((
+				Button,
+				Node {
+					height: Val::Px(24.0),
+					padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+					align_items: AlignItems::Center,
+					justify_content: JustifyContent::Center,
+					..default()
+				},
+				BackgroundColor(UI_BUTTON),
+				PalettePrevPageButton,
+			))
+			.with_children(|p| {
+				p.spawn((
+					Text::new("←"),
+					TextFont {
+						font_size: 13.0,
+						..default()
+					},
+					TextColor(Color::WHITE),
+				));
+			});
+			p.spawn((
+				Text::new("-/-"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+				PalettePageLabel,
+			));
+			p.spawn((
+				Button,
+				Node {
+					height: Val::Px(24.0),
+					padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+					align_items: AlignItems::Center,
+					justify_content: JustifyContent::Center,
+					..default()
+				},
+				BackgroundColor(UI_BUTTON),
+				PaletteNextPageButton,
+			))
+			.with_children(|p| {
+				p.spawn((
+					Text::new("→"),
+					TextFont {
+						font_size: 13.0,
+						..default()
+					},
+					TextColor(Color::WHITE),
+				));
+			});
+
+			p.spawn((
+				Text::new("缩略图:"),
+				TextFont {
+					font_size: 13.0,
+					..default()
+				},
+				TextColor(Color::WHITE),
+			));
+			for (label, level) in [
+				("小", PaletteZoomLevel::Small),
+				("中", PaletteZoomLevel::Medium),
+				("大", PaletteZoomLevel::Large),
+			] {
+				p.spawn((
+					Button,
+					Node {
+						height: Val::Px(24.0),
+						padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+						align_items: AlignItems::Center,
+						justify_content: JustifyContent::Center,
+						..default()
+					},
+					BackgroundColor(UI_BUTTON),
+					PaletteZoomButton(level),
+				))
+				.with_children(|p| {
+					p.spawn((
+						Text::new(label),
+						TextFont {
+							font_size: 13.0,
+							..default()
+						},
+						TextColor(Color::WHITE),
+					));
+				});
+			}
 		});
+
+		// Row 2: 搜索
 		p.spawn((
-			Text::new("-/-"),
-			TextFont {
-				font_size: 13.0,
-				..default()
-			},
-			TextColor(Color::WHITE),
-			PalettePageLabel,
-		));
-		p.spawn((
-			Button,
 			Node {
-				height: Val::Px(24.0),
-				padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+				width: Val::Percent(100.0),
+				height: Val::Px(28.0),
+				flex_direction: FlexDirection::Row,
 				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
+				column_gap: Val::Px(8.0),
 				..default()
 			},
-			BackgroundColor(UI_BUTTON),
-			PaletteNextPageButton,
+			BackgroundColor(Color::NONE),
 		))
 		.with_children(|p| {
 			p.spawn((
-				Text::new("→"),
+				Text::new("筛选:"),
 				TextFont {
 					font_size: 13.0,
 					..default()
 				},
 				TextColor(Color::WHITE),
 			));
+			p.spawn((
+				Button,
+				Node {
+					width: Val::Px(160.0),
+					height: Val::Px(24.0),
+					padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+					align_items: AlignItems::Center,
+					justify_content: JustifyContent::FlexStart,
+					..default()
+				},
+				BackgroundColor(UI_BUTTON),
+				PaletteSearchField,
+			))
+			.with_children(|p| {
+				p.spawn((
+					Text::new(" <全部>"),
+					TextFont {
+						font_size: 13.0,
+						..default()
+					},
+					TextColor(Color::WHITE),
+					PaletteSearchText,
+				));
+			});
+			p.spawn((
+				Button,
+				Node {
+					height: Val::Px(24.0),
+					padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+					align_items: AlignItems::Center,
+					justify_content: JustifyContent::Center,
+					..default()
+				},
+				BackgroundColor(UI_BUTTON),
+				PaletteSearchClearButton,
+			))
+			.with_children(|p| {
+				p.spawn((
+					Text::new("×"),
+					TextFont {
+						font_size: 13.0,
+						..default()
+					},
+					TextColor(Color::WHITE),
+				));
+			});
 		});
 	});
 
 	commands.entity(left_panel).add_child(palette_pager);
 	commands.entity(left_panel).add_child(palette_scroll);
-	commands.entity(root).add_child(left_panel);
-	commands.entity(root).add_child(right_panel);
+	commands.entity(main_row).add_child(left_panel);
+	commands.entity(main_row).add_child(right_panel);
+	commands.entity(root).add_child(menubar);
+	commands.entity(root).add_child(main_row);
 }

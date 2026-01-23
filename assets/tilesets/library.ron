@@ -24,7 +24,13 @@
             category: "default",
             asset_path: "tilesets/aa9c57ed0cc04a7ca1586d6e91d2278d.png",
         ),
+        (
+            id: "995c8d44ec67afe07c821604a4c3b0c4aabcf118d2928ebdb98548538d944281",
+            name: "98b75bab895a4eb5b27ec4bf33025d92",
+            category: "default",
+            asset_path: "tilesets/98b75bab895a4eb5b27ec4bf33025d92.png",
+        ),
     ],
     active_id: Some("64f71d81b9255611da80ccd456da86bdd862ca2e349ef9d742a397086cd11866"),
-    active_category: "",
+    active_category: "default",
 )

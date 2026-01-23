@@ -4,6 +4,7 @@ use bevy::prelude::*;
 
 use crate::editor::{UI_BUTTON, UI_BUTTON_HOVER, UI_BUTTON_PRESS, UI_HIGHLIGHT};
 use crate::editor::tileset::save_tileset_library;
+use crate::editor::util::despawn_silently;
 use crate::editor::types::{
     EditorState, TilesetActiveLabel, TilesetCategoryCycleButton, TilesetCategoryLabel, TilesetLibrary,
     TilesetMenuRoot, TilesetRuntime, TilesetSelectItem, TilesetToggleButton, UiState,
@@ -173,10 +174,10 @@ pub fn rebuild_tileset_menu_when_needed(
         for child in children.iter() {
             if let Ok(grandchildren) = children_q.get(child) {
                 for grandchild in grandchildren.iter() {
-                    commands.entity(grandchild).despawn();
+                    despawn_silently(&mut commands, grandchild);
                 }
             }
-            commands.entity(child).despawn();
+            despawn_silently(&mut commands, child);
         }
     }
 

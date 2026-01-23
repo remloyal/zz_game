@@ -6,8 +6,9 @@ use crate::editor::persistence::{load_map_from_file, save_map_to_file};
 use crate::editor::tileset::{merge_tilesets_from_map, open_tileset_impl, save_tileset_library};
 use crate::editor::types::{
     ActionButton, ActionKind, EditorConfig, TileEntities, TileMapData, TilesetLibrary, TilesetLoading,
-    TilesetRuntime, UiState, UndoStack,
+	ShiftMapMode, ShiftMapSettings, TilesetRuntime, UiState, UndoStack,
 };
+use crate::editor::util::despawn_silently;
 use crate::editor::world::apply_map_to_entities;
 use crate::editor::{UI_BUTTON, UI_BUTTON_HOVER, UI_BUTTON_PRESS};
 
@@ -24,6 +25,7 @@ pub fn action_button_click(
     runtime: Res<TilesetRuntime>,
     tile_entities: Option<Res<TileEntities>>,
     mut ui_state: ResMut<UiState>,
+    mut shift: ResMut<ShiftMapSettings>,
     mut sprite_vis_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     map: Option<ResMut<TileMapData>>,
     mut undo: ResMut<UndoStack>,
@@ -50,8 +52,44 @@ pub fn action_button_click(
     };
 
     match requested {
+        ActionKind::Undo => {
+            let (Some(mut map), Some(tile_entities)) = (map, tile_entities) else {
+                return;
+            };
+            let Some(cmd) = undo.undo.pop() else {
+                return;
+            };
+            for ch in &cmd.changes {
+                if ch.idx < map.tiles.len() {
+                    map.tiles[ch.idx] = ch.before.clone();
+                }
+            }
+            undo.redo.push(cmd);
+            apply_map_to_entities(&runtime, &map, &tile_entities, &mut sprite_vis_q, &config);
+        }
+        ActionKind::Redo => {
+            let (Some(mut map), Some(tile_entities)) = (map, tile_entities) else {
+                return;
+            };
+            let Some(cmd) = undo.redo.pop() else {
+                return;
+            };
+            for ch in &cmd.changes {
+                if ch.idx < map.tiles.len() {
+                    map.tiles[ch.idx] = ch.after.clone();
+                }
+            }
+            undo.undo.push(cmd);
+            apply_map_to_entities(&runtime, &map, &tile_entities, &mut sprite_vis_q, &config);
+        }
         ActionKind::ToggleGrid => {
             config.show_grid = !config.show_grid;
+        }
+        ActionKind::ToggleShiftMode => {
+            shift.mode = match shift.mode {
+                ShiftMapMode::Blank => ShiftMapMode::Wrap,
+                ShiftMapMode::Wrap => ShiftMapMode::Blank,
+            };
         }
         ActionKind::OpenTileset => {
             open_tileset_impl(&asset_server, &mut config, &mut lib, &mut tileset_loading);
@@ -85,7 +123,7 @@ pub fn action_button_click(
             if config.map_size.x != loaded.width || config.map_size.y != loaded.height {
                 if let Some(existing_tiles) = tile_entities.as_deref() {
                     for &e in &existing_tiles.entities {
-                        commands.entity(e).despawn();
+                        despawn_silently(&mut commands, e);
                     }
                 }
                 commands.remove_resource::<TileEntities>();
@@ -125,7 +163,7 @@ pub fn action_button_click(
             // 重建格子实体
             if let Some(existing_tiles) = tile_entities.as_deref() {
                 for &e in &existing_tiles.entities {
-                    commands.entity(e).despawn();
+                    despawn_silently(&mut commands, e);
                 }
             }
             commands.remove_resource::<TileEntities>();
@@ -157,7 +195,7 @@ pub fn action_button_click(
             if config.map_size.x != loaded.width || config.map_size.y != loaded.height {
                 if let Some(existing_tiles) = tile_entities.as_deref() {
                     for &e in &existing_tiles.entities {
-                        commands.entity(e).despawn();
+                        despawn_silently(&mut commands, e);
                     }
                 }
                 commands.remove_resource::<TileEntities>();

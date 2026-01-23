@@ -5,7 +5,7 @@ use crate::editor::types::{
     Clipboard, EditorConfig, PasteState, SelectionState, TileEntities, ToolKind, ToolState,
     WorldCamera,
 };
-use crate::editor::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX};
+use crate::editor::{LEFT_PANEL_WIDTH_PX, UI_TOP_RESERVED_PX};
 
 use super::paste_helpers::paste_dims;
 
@@ -99,7 +99,7 @@ pub fn draw_canvas_helpers(
     if cursor_pos.x <= LEFT_PANEL_WIDTH_PX {
         return;
     }
-    if cursor_pos.y <= RIGHT_TOPBAR_HEIGHT_PX {
+    if cursor_pos.y <= UI_TOP_RESERVED_PX {
         return;
     }
 
@@ -132,7 +132,7 @@ pub fn draw_canvas_helpers(
         let Some(cursor_pos) = window.cursor_position() else {
             return;
         };
-        if cursor_pos.x <= LEFT_PANEL_WIDTH_PX || cursor_pos.y <= RIGHT_TOPBAR_HEIGHT_PX {
+        if cursor_pos.x <= LEFT_PANEL_WIDTH_PX || cursor_pos.y <= UI_TOP_RESERVED_PX {
             return;
         }
         let Ok(world_pos) = camera.viewport_to_world_2d(camera_transform, cursor_pos) else {

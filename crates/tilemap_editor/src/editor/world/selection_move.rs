@@ -9,6 +9,7 @@ use crate::editor::types::{
     SelectionRect, SelectionState, TileEntities, TileMapData, TileRef, TilesetRuntime, ToolKind,
     ToolState, UndoStack, WorldCamera,
 };
+use crate::editor::util::despawn_silently;
 
 use super::{apply_tile_visual, cursor_tile_pos, tile_world_center};
 
@@ -230,7 +231,7 @@ pub fn selection_move_with_mouse(
     let want = (w * h) as usize;
     if drag.preview_dims != (w, h) || drag.preview_entities.len() != want {
         for &e in &drag.preview_entities {
-            commands.entity(e).despawn();
+            despawn_silently(&mut commands, e);
         }
         drag.preview_entities.clear();
         drag.preview_dims = (w, h);

@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::editor::types::{EditorConfig, PanState, WorldCamera};
-use crate::editor::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX};
+use crate::editor::{LEFT_PANEL_WIDTH_PX, UI_TOP_RESERVED_PX};
 
 /// 当地图尺寸变化时，把相机移动到地图中心（避免切换尺寸后内容在屏幕外）。
 pub fn recenter_camera_on_map_change(
@@ -54,7 +54,7 @@ pub fn camera_pan(
     }
 
     // 右侧顶部 UI 工具条不触发平移
-    if cursor.y <= RIGHT_TOPBAR_HEIGHT_PX {
+    if cursor.y <= UI_TOP_RESERVED_PX {
         pan.active = false;
         pan.last_world = None;
         return;
@@ -119,7 +119,7 @@ pub fn camera_zoom(
     }
 
     // 右侧顶部 UI 工具条区域不触发缩放
-    if cursor.y <= RIGHT_TOPBAR_HEIGHT_PX {
+    if cursor.y <= UI_TOP_RESERVED_PX {
         return;
     }
 

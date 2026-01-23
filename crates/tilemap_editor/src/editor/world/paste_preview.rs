@@ -5,6 +5,7 @@ use crate::editor::types::{
     Clipboard, EditorConfig, PastePreview, PastePreviewTile, PasteState, TileEntities, TileRef,
     TilesetRuntime, ToolKind, ToolState, WorldCamera,
 };
+use crate::editor::util::despawn_silently;
 
 use super::{apply_tile_visual, cursor_tile_pos, tile_world_center};
 use super::paste_helpers::{paste_dims, paste_dst_xy};
@@ -71,7 +72,7 @@ pub fn update_paste_preview(
 
     if preview.dims != (pw, ph) || preview.entities.len() != want {
         for &e in &preview.entities {
-            commands.entity(e).despawn();
+            despawn_silently(&mut commands, e);
         }
         preview.entities.clear();
         preview.dims = (pw, ph);

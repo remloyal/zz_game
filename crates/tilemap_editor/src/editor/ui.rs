@@ -10,6 +10,7 @@ mod font;
 mod hud;
 mod layers;
 mod map_size;
+mod menubar;
 mod palette;
 mod root;
 mod tileset_menu;
@@ -29,9 +30,15 @@ pub use map_size::{
 	sync_map_size_input_from_config, update_map_size_field_text,
 };
 
+pub use menubar::{
+	menubar_backdrop_click_to_close, menubar_button_interactions, menubar_close_when_menu_item_pressed,
+	menubar_rebuild_dropdown_when_needed, menubar_sync_button_styles,
+};
+
 pub use palette::{
 	build_palette_when_ready, palette_page_buttons, palette_scroll_wheel, palette_tile_click,
-	update_palette_page_label,
+	palette_search_text_input, palette_search_widget_interactions, palette_zoom_button_click,
+	sync_palette_zoom_button_styles, update_palette_page_label, update_palette_search_text,
 };
 pub use root::setup_ui;
 pub use tileset_menu::{

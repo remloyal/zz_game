@@ -11,6 +11,7 @@ use crate::editor::types::{
 use crate::editor::world::apply_map_to_entities;
 
 use super::util::resized_map_copy;
+use crate::editor::util::despawn_silently;
 
 pub fn map_size_widget_interactions(
     mut input: ResMut<MapSizeInput>,
@@ -237,7 +238,7 @@ pub fn apply_custom_map_size(
     // 重建格子实体
     if let Some(existing_tiles) = existing_tiles.as_deref() {
         for &e in &existing_tiles.entities {
-            commands.entity(e).despawn();
+            despawn_silently(&mut commands, e);
         }
     }
     commands.remove_resource::<TileEntities>();

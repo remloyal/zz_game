@@ -7,8 +7,8 @@ use super::{
 	tileset,
 	types::{
 		BrushSettings, Clipboard, ContextMenuCommand, ContextMenuState, EditorConfig, EditorState,
-		LayerState, MapSizeInput, PanState, PastePreview, PasteState, SelectionState, ShiftMapSettings,
-		TilesetLibrary, TilesetLoading, TilesetRuntime, ToolState, UiState, UndoStack,
+		LayerState, MapSizeInput, MenuState, PanState, PastePreview, PasteState, SelectionState, ShiftMapSettings,
+		TilesetLibrary, TilesetLoading, TilesetRuntime, ToolState, UiState, UndoStack, PaletteSearchInput,
 	},
 	ui,
 	world,
@@ -46,6 +46,8 @@ pub fn run() {
 		.init_resource::<PanState>()
 		.init_resource::<MapSizeInput>()
 		.init_resource::<UiState>()
+		.init_resource::<PaletteSearchInput>()
+		.init_resource::<MenuState>()
 		.init_resource::<ToolState>()
 		.init_resource::<BrushSettings>()
 		.init_resource::<Clipboard>()
@@ -88,11 +90,14 @@ pub fn run() {
 						.chain(),
 					(
 						(
-							ui::rebuild_tileset_menu_when_needed,
 							ui::tileset_menu_item_click,
-							ui::build_palette_when_ready,
+							ui::palette_zoom_button_click,
+							ui::palette_search_widget_interactions,
+							ui::palette_search_text_input,
 							ui::palette_page_buttons,
 							ui::update_palette_page_label,
+							ui::update_palette_search_text,
+							ui::sync_palette_zoom_button_styles,
 							ui::palette_tile_click,
 							ui::palette_scroll_wheel,
 						)
@@ -113,7 +118,6 @@ pub fn run() {
 				(
 					// --- UI: context menu ---
 					ui::context_menu_sync,
-					ui::context_menu_rebuild,
 					ui::context_menu_item_styles,
 					ui::context_menu_backdrop_click,
 					ui::context_menu_item_click,
@@ -131,8 +135,23 @@ pub fn run() {
 				ui::apply_custom_map_size,
 				ui::sync_map_size_input_from_config,
 				ui::update_map_size_field_text,
+				ui::menubar_button_interactions,
+				ui::menubar_sync_button_styles,
+				ui::menubar_backdrop_click_to_close,
+				ui::menubar_close_when_menu_item_pressed,
 				ui::action_button_click,
 			),
+		)
+		.add_systems(
+			PostUpdate,
+			(
+				// --- UI: rebuild / spawn & despawn (run late to avoid entity-despawn command errors) ---
+				ui::menubar_rebuild_dropdown_when_needed,
+				ui::context_menu_rebuild,
+				ui::rebuild_tileset_menu_when_needed,
+				ui::build_palette_when_ready,
+			)
+				.chain(),
 		)
 		.add_systems(
 			Update,

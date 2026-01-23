@@ -12,7 +12,7 @@ use super::types::{
     CellChange, EditCommand, EditorConfig, SelectionRect, TileEntities, TileMapData, TileRef,
     TilesetRuntime, UndoStack,
 };
-use super::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX};
+use super::{LEFT_PANEL_WIDTH_PX, UI_TOP_RESERVED_PX};
 
 mod layers;
 mod context_menu;
@@ -280,7 +280,7 @@ pub(crate) fn cursor_tile_pos(
     if cursor_pos.x <= LEFT_PANEL_WIDTH_PX {
         return None;
     }
-    if cursor_pos.y <= RIGHT_TOPBAR_HEIGHT_PX {
+    if cursor_pos.y <= UI_TOP_RESERVED_PX {
         return None;
     }
 

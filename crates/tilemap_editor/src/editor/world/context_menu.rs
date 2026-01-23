@@ -6,7 +6,7 @@ use crate::editor::types::{
     EditorConfig, LayerState, PasteState, SelectionRect, SelectionState, TileEntities, TileMapData,
     TilesetRuntime, ToolKind, ToolState, UndoStack, WorldCamera,
 };
-use crate::editor::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX};
+use crate::editor::{LEFT_PANEL_WIDTH_PX, UI_TOP_RESERVED_PX};
 
 use super::{apply_map_to_entities, apply_tile_visual, cursor_tile_pos};
 
@@ -42,7 +42,7 @@ pub fn context_menu_open_close(
         if pos.x <= LEFT_PANEL_WIDTH_PX {
             return;
         }
-        if pos.y <= RIGHT_TOPBAR_HEIGHT_PX {
+        if pos.y <= UI_TOP_RESERVED_PX {
             return;
         }
         menu.open = true;

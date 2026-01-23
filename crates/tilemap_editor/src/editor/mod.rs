@@ -14,6 +14,7 @@ mod persistence;
 mod tileset;
 mod types;
 mod ui;
+mod util;
 mod world;
 
 mod app;
@@ -22,10 +23,15 @@ use bevy::prelude::Color;
 
 /// UI 相关常量
 pub const LEFT_PANEL_WIDTH_PX: f32 = 320.0;
-pub const TILE_BUTTON_PX: f32 = 40.0;
 
 /// 右侧画布顶部工具条高度（用于避免 UI 区域误绘制/缩放/拖拽）。
 pub const RIGHT_TOPBAR_HEIGHT_PX: f32 = 56.0;
+
+/// 顶部菜单栏高度（全局）。
+pub const MENUBAR_HEIGHT_PX: f32 = 32.0;
+
+/// 顶部 UI 占用高度（menubar + 右侧 topbar）。
+pub const UI_TOP_RESERVED_PX: f32 = MENUBAR_HEIGHT_PX + RIGHT_TOPBAR_HEIGHT_PX;
 
 pub const UI_BG: Color = Color::srgb(0.12, 0.12, 0.12);
 pub const UI_PANEL: Color = Color::srgb(0.16, 0.16, 0.16);

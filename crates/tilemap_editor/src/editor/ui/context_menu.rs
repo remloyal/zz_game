@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::editor::{UI_BUTTON, UI_BUTTON_HOVER, UI_BUTTON_PRESS};
+use crate::editor::util::despawn_silently;
 use crate::editor::types::{
     Clipboard, ContextMenuAction, ContextMenuCommand, ContextMenuDisabled, ContextMenuItem,
     ContextMenuRoot, ContextMenuState, SelectionState, TileMapData, ToolKind, ToolState, UndoStack,
@@ -151,7 +152,7 @@ pub fn context_menu_rebuild(
                     despawn_tree(commands, children_q, child);
                 }
             }
-            commands.entity(entity).despawn();
+            despawn_silently(commands, entity);
         }
 
         for c in children.iter().collect::<Vec<_>>() {
