@@ -1,6 +1,7 @@
 //! 编辑器应用装配（Bevy App 构建与系统注册）。
 
 use bevy::prelude::*;
+use bevy::ui::UiSystems;
 
 use super::{
 	paths::workspace_assets_dir,
@@ -94,8 +95,6 @@ pub fn run() {
 							ui::palette_zoom_button_click,
 							ui::palette_search_widget_interactions,
 							ui::palette_search_text_input,
-							ui::palette_page_buttons,
-							ui::update_palette_page_label,
 							ui::update_palette_search_text,
 							ui::sync_palette_zoom_button_styles,
 							ui::palette_tile_click,
@@ -151,7 +150,18 @@ pub fn run() {
 				ui::rebuild_tileset_menu_when_needed,
 				ui::build_palette_when_ready,
 			)
-				.chain(),
+				.chain()
+				.before(UiSystems::Layout),
+		)
+		.add_systems(
+			PostUpdate,
+			(
+				// --- UI: palette scroll (needs valid ComputedNode size) ---
+				ui::palette_clamp_scroll_position,
+				ui::palette_apply_scroll_position_to_root,
+			)
+				.chain()
+				.after(UiSystems::Layout),
 		)
 		.add_systems(
 			Update,

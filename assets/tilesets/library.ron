@@ -31,6 +31,6 @@
             asset_path: "tilesets/98b75bab895a4eb5b27ec4bf33025d92.png",
         ),
     ],
-    active_id: Some("64f71d81b9255611da80ccd456da86bdd862ca2e349ef9d742a397086cd11866"),
+    active_id: Some("6afc1d87426b371443c540a3a34196efa6649780bb4fea0582fb73845959cbec"),
     active_category: "default",
 )

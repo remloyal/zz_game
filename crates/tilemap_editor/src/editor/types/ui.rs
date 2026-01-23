@@ -105,11 +105,11 @@ pub struct MenuItem;
 pub struct UiState {
     pub built_for_tileset_path: String,
     pub palette_page: u32,
-    pub palette_page_size: u32,
     pub built_palette_page: u32,
     pub palette_tile_px: f32,
     pub built_palette_tile_px: f32,
     pub built_palette_filter: String,
+	pub built_palette_filtered_count: u32,
     pub tileset_menu_open: bool,
     pub built_tileset_menu_count: usize,
     pub built_tileset_menu_active_id: String,
@@ -121,11 +121,11 @@ impl Default for UiState {
         Self {
             built_for_tileset_path: String::new(),
             palette_page: 0,
-            palette_page_size: 256,
             built_palette_page: u32::MAX,
             palette_tile_px: 40.0,
             built_palette_tile_px: -1.0,
             built_palette_filter: String::new(),
+			built_palette_filtered_count: 0,
             tileset_menu_open: false,
             built_tileset_menu_count: 0,
             built_tileset_menu_active_id: String::new(),
@@ -135,25 +135,10 @@ impl Default for UiState {
 }
 
 impl UiState {
-	pub fn palette_page_size(&self) -> u32 {
-		self.palette_page_size.max(1)
-	}
-
 	pub fn palette_tile_px(&self) -> f32 {
 		self.palette_tile_px.clamp(24.0, 96.0)
 	}
 }
-
-// --- Palette 分页控件 ---
-
-#[derive(Component)]
-pub struct PalettePrevPageButton;
-
-#[derive(Component)]
-pub struct PaletteNextPageButton;
-
-#[derive(Component)]
-pub struct PalettePageLabel;
 
 // --- Palette 缩略图缩放 ---
 

@@ -2,15 +2,15 @@
 
 use bevy::prelude::*;
 
-use crate::editor::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX, UI_BUTTON, UI_PANEL};
+use crate::editor::{LEFT_PANEL_WIDTH_PX, RIGHT_TOPBAR_HEIGHT_PX, UI_BUTTON, UI_PANEL, UI_TOP_RESERVED_PX};
+
 use crate::editor::types::{
-	ActionButton, ActionKind, CanvasRoot, HudText,
+	CanvasRoot, HudText,
 	MenuButton, MenuId,
 		LayerPrevButton, LayerNextButton, LayerActiveLabel, LayerActiveVisLabel, LayerActiveVisToggleButton,
 		LayerActiveLockLabel, LayerActiveLockToggleButton,
 		BrushSizeButton,
-	MapSizeApplyButton, MapSizeHeightField, MapSizeHeightText, MapSizeWidthField, MapSizeWidthText,
-	PaletteNextPageButton, PalettePageLabel, PalettePrevPageButton, PaletteRoot, PaletteScroll,
+	PaletteRoot, PaletteScroll,
 	PaletteSearchClearButton, PaletteSearchField, PaletteSearchText,
 	PaletteZoomButton, PaletteZoomLevel,
 	ShiftModeButton, ShiftModeLabel,
@@ -25,16 +25,21 @@ pub fn setup_ui(mut commands: Commands) {
 	commands.spawn((
 		Text::new("按 O 或点【打开】导入 tileset"),
 		TextFont {
-			font_size: 16.0,
+			font_size: 13.0,
 			..default()
 		},
 		TextColor(Color::WHITE),
 		Node {
 			position_type: PositionType::Absolute,
-			top: Val::Px(10.0),
-			left: Val::Px(10.0),
+			top: Val::Px(UI_TOP_RESERVED_PX + 8.0),
+			right: Val::Px(10.0),
+			max_width: Val::Px(420.0),
+			padding: UiRect::all(Val::Px(8.0)),
 			..default()
 		},
+		BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+		ZIndex(800),
+		bevy::ui::FocusPolicy::Pass,
 		HudText,
 	));
 
@@ -419,9 +424,13 @@ fn spawn_ui_root(commands: &mut Commands) {
 			Node {
 				width: Val::Percent(100.0),
 				flex_grow: 1.0,
-				overflow: Overflow::scroll_y(),
+				min_height: Val::Px(0.0),
+				flex_direction: FlexDirection::Column,
+				align_items: AlignItems::FlexStart,
+				overflow: Overflow::clip_y(),
 				..default()
 			},
+			ScrollPosition::default(),
 			PaletteScroll,
 		))
 		.id();
@@ -430,8 +439,15 @@ fn spawn_ui_root(commands: &mut Commands) {
 		.spawn((
 			Node {
 				width: Val::Percent(100.0),
+				height: Val::Auto,
+				position_type: PositionType::Absolute,
+				top: Val::Px(0.0),
+				left: Val::Px(0.0),
 				flex_direction: FlexDirection::Row,
 				flex_wrap: FlexWrap::Wrap,
+				justify_content: JustifyContent::FlexStart,
+				align_items: AlignItems::FlexStart,
+				align_content: AlignContent::FlexStart,
 				column_gap: Val::Px(6.0),
 				row_gap: Val::Px(6.0),
 				..default()
@@ -518,141 +534,6 @@ fn spawn_ui_root(commands: &mut Commands) {
 				));
 			});
 		}
-
-		p.spawn((
-			Text::new("地图尺寸:"),
-			TextFont {
-				font_size: 13.0,
-				..default()
-			},
-			TextColor(Color::WHITE),
-		));
-
-		for (w, h) in [(40u32, 25u32), (64u32, 36u32), (100u32, 60u32)] {
-			p.spawn((
-				Button,
-				Node {
-					height: Val::Px(36.0),
-					padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-					align_items: AlignItems::Center,
-					justify_content: JustifyContent::Center,
-					..default()
-				},
-				BackgroundColor(UI_BUTTON),
-				ActionButton(ActionKind::SetMapSize { width: w, height: h }),
-			))
-			.with_children(|p| {
-				p.spawn((
-					Text::new(format!("{w}x{h}")),
-					TextFont {
-						font_size: 13.0,
-						..default()
-					},
-					TextColor(Color::WHITE),
-				));
-			});
-		}
-
-		p.spawn((
-			Text::new("自定义:"),
-			TextFont {
-				font_size: 13.0,
-				..default()
-			},
-			TextColor(Color::WHITE),
-		));
-
-		// 宽
-		p.spawn((
-			Button,
-			Node {
-				width: Val::Px(86.0),
-				height: Val::Px(36.0),
-				padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
-				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
-				..default()
-			},
-			BackgroundColor(UI_BUTTON),
-			MapSizeWidthField,
-		))
-		.with_children(|p| {
-			p.spawn((
-				Text::new("W"),
-				TextFont {
-					font_size: 13.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-			));
-			p.spawn((
-				Text::new(""),
-				TextFont {
-					font_size: 13.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-				MapSizeWidthText,
-			));
-		});
-
-		// 高
-		p.spawn((
-			Button,
-			Node {
-				width: Val::Px(86.0),
-				height: Val::Px(36.0),
-				padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
-				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
-				..default()
-			},
-			BackgroundColor(UI_BUTTON),
-			MapSizeHeightField,
-		))
-		.with_children(|p| {
-			p.spawn((
-				Text::new("H"),
-				TextFont {
-					font_size: 13.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-			));
-			p.spawn((
-				Text::new(""),
-				TextFont {
-					font_size: 13.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-				MapSizeHeightText,
-			));
-		});
-
-		// 应用
-		p.spawn((
-			Button,
-			Node {
-				height: Val::Px(36.0),
-				padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-				align_items: AlignItems::Center,
-				justify_content: JustifyContent::Center,
-				..default()
-			},
-			BackgroundColor(UI_BUTTON),
-			MapSizeApplyButton,
-		))
-		.with_children(|p| {
-			p.spawn((
-				Text::new("应用(Enter)"),
-				TextFont {
-					font_size: 13.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-			));
-		});
 
 		// Shift Map 模式：空白 / 环绕
 		p.spawn((
@@ -816,7 +697,7 @@ fn spawn_ui_root(commands: &mut Commands) {
 		))
 		.id();
 	commands.entity(palette_pager).with_children(|p| {
-		// Row 1: 分页 + 缩略图缩放
+		// Row 1: 缩略图缩放
 		p.spawn((
 			Node {
 				width: Val::Percent(100.0),
@@ -837,59 +718,6 @@ fn spawn_ui_root(commands: &mut Commands) {
 				},
 				TextColor(Color::WHITE),
 			));
-			p.spawn((
-				Button,
-				Node {
-					height: Val::Px(24.0),
-					padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-					align_items: AlignItems::Center,
-					justify_content: JustifyContent::Center,
-					..default()
-				},
-				BackgroundColor(UI_BUTTON),
-				PalettePrevPageButton,
-			))
-			.with_children(|p| {
-				p.spawn((
-					Text::new("←"),
-					TextFont {
-						font_size: 13.0,
-						..default()
-					},
-					TextColor(Color::WHITE),
-				));
-			});
-			p.spawn((
-				Text::new("-/-"),
-				TextFont {
-					font_size: 13.0,
-					..default()
-				},
-				TextColor(Color::WHITE),
-				PalettePageLabel,
-			));
-			p.spawn((
-				Button,
-				Node {
-					height: Val::Px(24.0),
-					padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-					align_items: AlignItems::Center,
-					justify_content: JustifyContent::Center,
-					..default()
-				},
-				BackgroundColor(UI_BUTTON),
-				PaletteNextPageButton,
-			))
-			.with_children(|p| {
-				p.spawn((
-					Text::new("→"),
-					TextFont {
-						font_size: 13.0,
-						..default()
-					},
-					TextColor(Color::WHITE),
-				));
-			});
 
 			p.spawn((
 				Text::new("缩略图:"),

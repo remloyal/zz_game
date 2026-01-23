@@ -3,8 +3,9 @@
 use bevy::prelude::*;
 
 use crate::editor::types::{
-	ActionButton, ActionKind, MenuBackdrop, MenuButton, MenuDropdown, MenuId, MenuItem, MenuState,
-	UiRoot,
+	ActionButton, ActionKind, MapSizeApplyButton, MapSizeHeightField, MapSizeHeightText,
+	MapSizeWidthField, MapSizeWidthText, MenuBackdrop, MenuButton, MenuDropdown, MenuId, MenuItem,
+	MenuState, UiRoot,
 };
 use crate::editor::util::despawn_silently;
 use crate::editor::{MENUBAR_HEIGHT_PX, UI_BUTTON, UI_BUTTON_HOVER, UI_BUTTON_PRESS, UI_HIGHLIGHT, UI_PANEL};
@@ -195,6 +196,97 @@ pub fn menubar_rebuild_dropdown_when_needed(
 					item!("地图尺寸: 40x25", ActionKind::SetMapSize { width: 40, height: 25 });
 					item!("地图尺寸: 64x36", ActionKind::SetMapSize { width: 64, height: 36 });
 					item!("地图尺寸: 100x60", ActionKind::SetMapSize { width: 100, height: 60 });
+					label!("自定义尺寸（点击 W/H 后输入数字）");
+
+					// Row: W / H
+					m.spawn((
+						Node {
+							width: Val::Percent(100.0),
+							height: Val::Px(MENU_ITEM_HEIGHT_PX),
+							flex_direction: FlexDirection::Row,
+							align_items: AlignItems::Center,
+							column_gap: Val::Px(8.0),
+							..default()
+						},
+					))
+					.with_children(|r| {
+						r.spawn((
+							Button,
+							Node {
+								width: Val::Px(80.0),
+								height: Val::Px(MENU_ITEM_HEIGHT_PX),
+								padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+								align_items: AlignItems::Center,
+								justify_content: JustifyContent::Center,
+								..default()
+							},
+							BackgroundColor(UI_BUTTON),
+							MapSizeWidthField,
+						))
+						.with_children(|p| {
+							p.spawn((
+								Text::new("W"),
+								TextFont { font_size: 13.0, ..default() },
+								TextColor(Color::WHITE),
+							));
+							p.spawn((
+								Text::new(""),
+								TextFont { font_size: 13.0, ..default() },
+								TextColor(Color::WHITE),
+								MapSizeWidthText,
+							));
+						});
+
+						r.spawn((
+							Button,
+							Node {
+								width: Val::Px(80.0),
+								height: Val::Px(MENU_ITEM_HEIGHT_PX),
+								padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+								align_items: AlignItems::Center,
+								justify_content: JustifyContent::Center,
+								..default()
+							},
+							BackgroundColor(UI_BUTTON),
+							MapSizeHeightField,
+						))
+						.with_children(|p| {
+							p.spawn((
+								Text::new("H"),
+								TextFont { font_size: 13.0, ..default() },
+								TextColor(Color::WHITE),
+							));
+							p.spawn((
+								Text::new(""),
+								TextFont { font_size: 13.0, ..default() },
+								TextColor(Color::WHITE),
+								MapSizeHeightText,
+							));
+						});
+					});
+
+					// Apply (full width)
+					m.spawn((
+						Button,
+						Node {
+							width: Val::Percent(100.0),
+							height: Val::Px(MENU_ITEM_HEIGHT_PX),
+							padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+							align_items: AlignItems::Center,
+							justify_content: JustifyContent::Center,
+							..default()
+						},
+						BackgroundColor(UI_BUTTON),
+						MapSizeApplyButton,
+					))
+					.with_children(|p| {
+						p.spawn((
+							Text::new("应用(Enter)"),
+							TextFont { font_size: 13.0, ..default() },
+							TextColor(Color::WHITE),
+						));
+					});
+
 					item!("Shift 模式切换", ActionKind::ToggleShiftMode);
 				}
 				MenuId::Layer => {

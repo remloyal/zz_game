@@ -36,9 +36,10 @@ pub use menubar::{
 };
 
 pub use palette::{
-	build_palette_when_ready, palette_page_buttons, palette_scroll_wheel, palette_tile_click,
+	build_palette_when_ready, palette_scroll_wheel, palette_tile_click,
+	palette_clamp_scroll_position, palette_apply_scroll_position_to_root,
 	palette_search_text_input, palette_search_widget_interactions, palette_zoom_button_click,
-	sync_palette_zoom_button_styles, update_palette_page_label, update_palette_search_text,
+	sync_palette_zoom_button_styles, update_palette_search_text,
 };
 pub use root::setup_ui;
 pub use tileset_menu::{

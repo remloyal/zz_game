@@ -47,7 +47,7 @@ pub use ui::{
     LayerActiveLockLabel, LayerActiveLockToggleButton,
     MapSizeApplyButton, MapSizeFocus, MapSizeHeightField,
     MapSizeHeightText, MapSizeInput, MapSizeWidthField, MapSizeWidthText, PaletteRoot, PaletteScroll,
-    PaletteNextPageButton, PalettePageLabel, PalettePrevPageButton, PaletteTileButton, TilesetActiveLabel,
+    PaletteTileButton, TilesetActiveLabel,
     PaletteSearchClearButton, PaletteSearchField, PaletteSearchInput, PaletteSearchText,
     PaletteZoomButton, PaletteZoomLevel,
 	MenuBackdrop, MenuButton, MenuDropdown, MenuId, MenuItem, MenuState,
