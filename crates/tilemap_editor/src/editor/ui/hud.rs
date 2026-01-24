@@ -65,9 +65,13 @@ pub fn update_hud_text(
 			};
 			crate::editor::world::cursor_tile_pos(window, camera, camera_transform, &config, map_w, map_h)
 		})();
-		let cursor_line = match cursor_tile {
-			Some(p) => format!("鼠标: ({}, {})", p.x, p.y),
-			None => "鼠标: -".to_string(),
+		let cursor_line = if config.show_cursor {
+			match cursor_tile {
+				Some(p) => format!("鼠标: ({}, {})", p.x, p.y),
+				None => "鼠标: -".to_string(),
+			}
+		} else {
+			"鼠标: (隐藏)".to_string()
 		};
 
 		format!(

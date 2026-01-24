@@ -24,7 +24,11 @@ pub use context_menu::{
 };
 pub use font::{apply_ui_font_to_all_text, load_ui_font};
 pub use hud::update_hud_text;
-pub use layers::{layer_topbar_buttons, update_layer_topbar_label};
+pub use layers::{
+	layer_topbar_buttons, update_layer_topbar_label,
+	layer_name_widget_interactions, layer_name_text_input,
+	sync_layer_name_input_from_map, update_layer_name_field_text, apply_layer_name_change,
+};
 pub use map_size::{
 	apply_custom_map_size, map_size_text_input, map_size_widget_interactions,
 	sync_map_size_input_from_config, update_map_size_field_text,

@@ -14,6 +14,8 @@ pub struct EditorConfig {
     pub save_path: String,
     pub tileset_import_dir: String,
     pub show_grid: bool,
+    pub show_hover: bool,
+    pub show_cursor: bool,
 }
 
 impl Default for EditorConfig {
@@ -27,6 +29,8 @@ impl Default for EditorConfig {
                 .to_string(),
             tileset_import_dir: "tilesets".to_string(),
             show_grid: true,
+            show_hover: true,
+            show_cursor: true,
         }
     }
 }

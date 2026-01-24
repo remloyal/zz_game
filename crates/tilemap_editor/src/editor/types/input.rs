@@ -4,5 +4,5 @@ use bevy::prelude::*;
 #[derive(Resource, Default)]
 pub struct PanState {
     pub active: bool,
-    pub last_world: Option<Vec2>,
+    pub last_cursor: Option<Vec2>,
 }

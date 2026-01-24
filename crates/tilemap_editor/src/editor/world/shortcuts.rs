@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::editor::types::{
     CellChange, EditCommand, EditorConfig, EditorState, MapSizeFocus, MapSizeInput, TileEntities,
     BrushSettings, TileMapData, TilesetLibrary, TilesetRuntime, ToolKind, ToolState, UndoStack,
+    PaletteSearchInput, LayerNameInput,
 };
 
 use super::apply_map_to_entities;
@@ -59,11 +60,13 @@ pub fn keyboard_shortcuts(
 pub fn tool_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     input: Res<MapSizeInput>,
+    palette_input: Res<PaletteSearchInput>,
+    layer_name_input: Res<LayerNameInput>,
     mut tools: ResMut<ToolState>,
     mut brush: ResMut<BrushSettings>,
 ) {
     // 正在输入地图尺寸时，数字键留给输入框。
-    if input.focus != MapSizeFocus::None {
+    if input.focus != MapSizeFocus::None || palette_input.focused || layer_name_input.focused {
         return;
     }
 

@@ -19,6 +19,8 @@ use crate::editor::types::{
 const PALETTE_TILE_PX_SMALL: f32 = 32.0;
 const PALETTE_TILE_PX_MEDIUM: f32 = 40.0;
 const PALETTE_TILE_PX_LARGE: f32 = 56.0;
+const PALETTE_COL_GAP_PX: f32 = 6.0;
+const PALETTE_ROW_GAP_PX: f32 = 6.0;
 
 fn zoom_level_for_tile_px(px: f32) -> PaletteZoomLevel {
     if (px - PALETTE_TILE_PX_SMALL).abs() <= 0.5 {
@@ -82,6 +84,7 @@ fn palette_filter_matches(index: u32, columns: u32, query: &str) -> bool {
 }
 
 
+
 pub fn palette_zoom_button_click(
     mut ui_state: ResMut<UiState>,
     mut scroll_q: Query<&mut ScrollPosition, With<PaletteScroll>>,
@@ -109,7 +112,6 @@ pub fn palette_zoom_button_click(
 
     if changed {
         ui_state.built_for_tileset_path.clear();
-        ui_state.built_palette_page = u32::MAX;
         ui_state.built_palette_tile_px = -1.0;
         // 缩放后滚动回顶部，避免“跳帧感”
         for mut scroll in scroll_q.iter_mut() {
@@ -196,9 +198,7 @@ pub fn palette_search_widget_interactions(
 
     if cleared {
         input.focused = false;
-        ui_state.palette_page = 0;
         ui_state.built_for_tileset_path.clear();
-        ui_state.built_palette_page = u32::MAX;
         ui_state.built_palette_filter.clear();
         for mut scroll in scroll_q.iter_mut() {
             scroll.0.y = 0.0;
@@ -293,9 +293,7 @@ pub fn palette_search_text_input(keys: Res<ButtonInput<KeyCode>>, mut input: Res
     }
 
     if changed {
-        ui_state.palette_page = 0;
         ui_state.built_for_tileset_path.clear();
-        ui_state.built_palette_page = u32::MAX;
         ui_state.built_palette_filter.clear();
         for mut scroll in scroll_q.iter_mut() {
             scroll.0.y = 0.0;
@@ -418,9 +416,6 @@ pub fn palette_clamp_scroll_position(
 
     // 由于我们使用“clip + 手动 top 偏移”，root 的 ComputedNode 高度可能不会反映真实内容高度。
     // 所以这里用「tile 数量 + tile 尺寸 + gap + 可用宽度」推导出理论内容高度来做 clamp。
-    const COL_GAP_PX: f32 = 6.0;
-    const ROW_GAP_PX: f32 = 6.0;
-
     let tile_count = ui_state.built_palette_filtered_count;
     if tile_count == 0 {
         for mut scroll in scroll_q.iter_mut() {
@@ -436,10 +431,10 @@ pub fn palette_clamp_scroll_position(
 	}
 
 	// cols = floor((w + gap) / (tile_w + gap))
-	let denom = (tile_w + COL_GAP_PX).max(1.0);
-	let cols = (((viewport_w + COL_GAP_PX) / denom).floor() as u32).max(1);
-	let rows = (tile_count + cols - 1) / cols;
-	let content_h = rows as f32 * tile_h + (rows.saturating_sub(1) as f32) * ROW_GAP_PX;
+    let denom = (tile_w + PALETTE_COL_GAP_PX).max(1.0);
+    let cols = (((viewport_w + PALETTE_COL_GAP_PX) / denom).floor() as u32).max(1);
+    let rows = (tile_count + cols - 1) / cols;
+    let content_h = rows as f32 * tile_h + (rows.saturating_sub(1) as f32) * PALETTE_ROW_GAP_PX;
 	let max_y = (content_h - viewport_h).max(0.0);
 
     for mut scroll in scroll_q.iter_mut() {
@@ -504,8 +499,6 @@ pub fn build_palette_when_ready(
     // tileset 切换时重置页码
     // 注意：不能用 built_for_tileset_path 来判断“是否切换”，因为它也会被其它系统清空以强制重建。
     if *last_tileset_id != *active_id {
-        ui_state.palette_page = 0;
-        ui_state.built_palette_page = u32::MAX;
         for mut scroll in scroll_q.iter_mut() {
             scroll.0.y = 0.0;
         }
@@ -584,8 +577,6 @@ pub fn build_palette_when_ready(
     });
 
     ui_state.built_for_tileset_path = active_id.clone();
-    ui_state.palette_page = 0;
-    ui_state.built_palette_page = 0;
     ui_state.built_palette_tile_px = tile_px;
     ui_state.built_palette_filter = filter.to_string();
 

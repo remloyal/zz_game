@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::editor::types::{
 	ActionButton, ActionKind, MapSizeApplyButton, MapSizeHeightField, MapSizeHeightText,
 	MapSizeWidthField, MapSizeWidthText, MenuBackdrop, MenuButton, MenuDropdown, MenuId, MenuItem,
-	MenuState, UiRoot,
+	MenuState, UiRoot, LayerNameApplyButton, LayerNameField, LayerNameText,
 };
 use crate::editor::util::despawn_silently;
 use crate::editor::{MENUBAR_HEIGHT_PX, UI_BUTTON, UI_BUTTON_HOVER, UI_BUTTON_PRESS, UI_HIGHLIGHT, UI_PANEL};
@@ -191,6 +191,8 @@ pub fn menubar_rebuild_dropdown_when_needed(
 				}
 				MenuId::View => {
 					item!("网格开关", ActionKind::ToggleGrid);
+					item!("Hover 高亮开关", ActionKind::ToggleHover);
+					item!("坐标显示开关", ActionKind::ToggleCursor);
 				}
 				MenuId::Map => {
 					item!("地图尺寸: 40x25", ActionKind::SetMapSize { width: 40, height: 25 });
@@ -290,7 +292,62 @@ pub fn menubar_rebuild_dropdown_when_needed(
 					item!("Shift 模式切换", ActionKind::ToggleShiftMode);
 				}
 				MenuId::Layer => {
-					label!("图层相关先用右上角悬浮控件");
+					label!("当前层名称（回车/按钮应用）");
+
+					m.spawn((
+						Node {
+							width: Val::Percent(100.0),
+							height: Val::Px(MENU_ITEM_HEIGHT_PX),
+							flex_direction: FlexDirection::Row,
+							align_items: AlignItems::Center,
+							column_gap: Val::Px(8.0),
+							..default()
+						},
+					))
+					.with_children(|r| {
+						r.spawn((
+							Button,
+							Node {
+								width: Val::Px(120.0),
+								height: Val::Px(MENU_ITEM_HEIGHT_PX),
+								padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+								align_items: AlignItems::Center,
+								justify_content: JustifyContent::FlexStart,
+								..default()
+							},
+							BackgroundColor(UI_BUTTON),
+							LayerNameField,
+						))
+						.with_children(|p| {
+							p.spawn((
+								Text::new(" "),
+								TextFont { font_size: 13.0, ..default() },
+								TextColor(Color::WHITE),
+								LayerNameText,
+							));
+						});
+
+						r.spawn((
+							Button,
+							Node {
+								width: Val::Px(52.0),
+								height: Val::Px(MENU_ITEM_HEIGHT_PX),
+								padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
+								align_items: AlignItems::Center,
+								justify_content: JustifyContent::Center,
+								..default()
+							},
+							BackgroundColor(UI_BUTTON),
+							LayerNameApplyButton,
+						))
+						.with_children(|p| {
+							p.spawn((
+								Text::new("应用"),
+								TextFont { font_size: 13.0, ..default() },
+								TextColor(Color::WHITE),
+							));
+						});
+					});
 				}
 				MenuId::Help => {
 					label!("见 docs/tilemap_editor_controls.md");

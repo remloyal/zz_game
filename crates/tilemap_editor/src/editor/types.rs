@@ -54,4 +54,5 @@ pub use ui::{
     TilesetBar, TilesetCategoryCycleButton, TilesetCategoryLabel,
     TilesetMenuRoot, TilesetSelectItem, TilesetToggleButton, UiFont, UiRoot, UiState,
     BrushSizeButton,
+    LayerNameApplyButton, LayerNameField, LayerNameInput, LayerNameText,
 };

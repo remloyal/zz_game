@@ -33,69 +33,66 @@ pub fn camera_pan(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<WorldCamera>>,
+    camera_q: Query<(&Camera, &Projection), With<WorldCamera>>,
     mut cam_tf_q: Query<&mut Transform, With<WorldCamera>>,
     mut pan: ResMut<PanState>,
 ) {
     let Ok(window) = windows.single() else {
         return;
     };
-    let Some(cursor) = window.cursor_position() else {
-        pan.active = false;
-        pan.last_world = None;
-        return;
-    };
-
-    // 左侧面板不触发平移
-    if cursor.x <= LEFT_PANEL_WIDTH_PX {
-        pan.active = false;
-        pan.last_world = None;
-        return;
-    }
-
-    // 右侧顶部 UI 工具条不触发平移
-    if cursor.y <= UI_TOP_RESERVED_PX {
-        pan.active = false;
-        pan.last_world = None;
-        return;
-    }
-
     let want_pan = buttons.pressed(MouseButton::Middle)
         || (keys.pressed(KeyCode::Space) && buttons.pressed(MouseButton::Left));
 
     if !want_pan {
         pan.active = false;
-        pan.last_world = None;
+        pan.last_cursor = None;
         return;
     }
 
-    let Ok((camera, camera_transform)) = camera_q.single() else {
-        return;
-    };
-    let Ok(world) = camera.viewport_to_world_2d(camera_transform, cursor) else {
+    let Some(cursor) = window.cursor_position() else {
+        // 鼠标在窗口外：保持当前 pan 状态，避免抖动/闪烁
         return;
     };
 
+    // 仅在“开始拖拽”时检查 UI 边界；拖拽中允许越界，避免抖动
     if !pan.active {
-        pan.active = true;
-        pan.last_world = Some(world);
-        return;
-    }
-
-    let Some(last_world) = pan.last_world else {
-        pan.last_world = Some(world);
-        return;
-    };
-
-    let delta = last_world - world;
-    if delta.length_squared() > 0.0 {
-        if let Ok(mut tf) = cam_tf_q.single_mut() {
-            tf.translation.x += delta.x;
-            tf.translation.y += delta.y;
+        if cursor.x <= LEFT_PANEL_WIDTH_PX {
+            return;
+        }
+        if cursor.y <= UI_TOP_RESERVED_PX {
+            return;
         }
     }
 
-    pan.last_world = Some(world);
+    if !pan.active {
+        pan.active = true;
+        pan.last_cursor = Some(cursor);
+        return;
+    }
+
+    let Some(last_cursor) = pan.last_cursor else {
+        pan.last_cursor = Some(cursor);
+        return;
+    };
+
+    let Ok((_camera, projection)) = camera_q.single() else {
+        return;
+    };
+
+    let scale = match projection {
+        Projection::Orthographic(ortho) => ortho.scale,
+        _ => 1.0,
+    };
+
+    let delta_screen = last_cursor - cursor;
+    if delta_screen.length_squared() > 0.0 {
+        if let Ok(mut tf) = cam_tf_q.single_mut() {
+            tf.translation.x += delta_screen.x * scale;
+            tf.translation.y -= delta_screen.y * scale;
+        }
+    }
+
+    pan.last_cursor = Some(cursor);
 }
 
 /// 世界相机缩放（右侧区域鼠标滚轮）。

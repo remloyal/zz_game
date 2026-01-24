@@ -85,6 +85,12 @@ pub fn action_button_click(
         ActionKind::ToggleGrid => {
             config.show_grid = !config.show_grid;
         }
+        ActionKind::ToggleHover => {
+            config.show_hover = !config.show_hover;
+        }
+        ActionKind::ToggleCursor => {
+            config.show_cursor = !config.show_cursor;
+        }
         ActionKind::ToggleShiftMode => {
             shift.mode = match shift.mode {
                 ShiftMapMode::Blank => ShiftMapMode::Wrap,

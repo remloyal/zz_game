@@ -10,6 +10,7 @@ use super::{
 		BrushSettings, Clipboard, ContextMenuCommand, ContextMenuState, EditorConfig, EditorState,
 		LayerState, MapSizeInput, MenuState, PanState, PastePreview, PasteState, SelectionState, ShiftMapSettings,
 		TilesetLibrary, TilesetLoading, TilesetRuntime, ToolState, UiState, UndoStack, PaletteSearchInput,
+		LayerNameInput,
 	},
 	ui,
 	world,
@@ -48,6 +49,7 @@ pub fn run() {
 		.init_resource::<MapSizeInput>()
 		.init_resource::<UiState>()
 		.init_resource::<PaletteSearchInput>()
+		.init_resource::<LayerNameInput>()
 		.init_resource::<MenuState>()
 		.init_resource::<ToolState>()
 		.init_resource::<BrushSettings>()
@@ -134,6 +136,11 @@ pub fn run() {
 				ui::apply_custom_map_size,
 				ui::sync_map_size_input_from_config,
 				ui::update_map_size_field_text,
+				ui::layer_name_widget_interactions,
+				ui::layer_name_text_input,
+				ui::apply_layer_name_change,
+				ui::sync_layer_name_input_from_map,
+				ui::update_layer_name_field_text,
 				ui::menubar_button_interactions,
 				ui::menubar_sync_button_styles,
 				ui::menubar_backdrop_click_to_close,

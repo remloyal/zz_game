@@ -93,39 +93,30 @@ pub fn draw_canvas_helpers(
     }
 
     // hover 格子高亮（仅在鼠标在右侧画布区域时）
-    let Some(cursor_pos) = window.cursor_position() else {
-        return;
-    };
-    if cursor_pos.x <= LEFT_PANEL_WIDTH_PX {
-        return;
+    if config.show_hover {
+        if let Some(cursor_pos) = window.cursor_position() {
+            if cursor_pos.x > LEFT_PANEL_WIDTH_PX && cursor_pos.y > UI_TOP_RESERVED_PX {
+                if let Ok(world_pos) = camera.viewport_to_world_2d(camera_transform, cursor_pos) {
+                    let x = (world_pos.x / tile_w).floor() as i32;
+                    let y = (world_pos.y / tile_h).floor() as i32;
+                    if x >= 0 && y >= 0 {
+                        let (x, y) = (x as u32, y as u32);
+                        if x < map_w && y < map_h {
+                            let x0 = x as f32 * tile_w;
+                            let y0 = y as f32 * tile_h;
+                            let x1 = x0 + tile_w;
+                            let y1 = y0 + tile_h;
+                            let hover_color = Color::srgba(0.25, 0.45, 0.95, 0.85);
+                            gizmos.line_2d(Vec2::new(x0, y0), Vec2::new(x1, y0), hover_color);
+                            gizmos.line_2d(Vec2::new(x1, y0), Vec2::new(x1, y1), hover_color);
+                            gizmos.line_2d(Vec2::new(x1, y1), Vec2::new(x0, y1), hover_color);
+                            gizmos.line_2d(Vec2::new(x0, y1), Vec2::new(x0, y0), hover_color);
+                        }
+                    }
+                }
+            }
+        }
     }
-    if cursor_pos.y <= UI_TOP_RESERVED_PX {
-        return;
-    }
-
-    let Ok(world_pos) = camera.viewport_to_world_2d(camera_transform, cursor_pos) else {
-        return;
-    };
-
-    let x = (world_pos.x / tile_w).floor() as i32;
-    let y = (world_pos.y / tile_h).floor() as i32;
-    if x < 0 || y < 0 {
-        return;
-    }
-    let (x, y) = (x as u32, y as u32);
-    if x >= map_w || y >= map_h {
-        return;
-    }
-
-    let x0 = x as f32 * tile_w;
-    let y0 = y as f32 * tile_h;
-    let x1 = x0 + tile_w;
-    let y1 = y0 + tile_h;
-    let hover_color = Color::srgba(0.25, 0.45, 0.95, 0.85);
-    gizmos.line_2d(Vec2::new(x0, y0), Vec2::new(x1, y0), hover_color);
-    gizmos.line_2d(Vec2::new(x1, y0), Vec2::new(x1, y1), hover_color);
-    gizmos.line_2d(Vec2::new(x1, y1), Vec2::new(x0, y1), hover_color);
-    gizmos.line_2d(Vec2::new(x0, y1), Vec2::new(x0, y0), hover_color);
 
     // 粘贴预览（Paste 工具）：以鼠标所在格子为左上角
     if tools.tool == ToolKind::Paste && clipboard.width > 0 && clipboard.height > 0 {

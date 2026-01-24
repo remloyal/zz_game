@@ -65,6 +65,10 @@ pub enum ActionKind {
     ExportMap,
     /// 切换网格显示。
     ToggleGrid,
+    /// 切换 hover 高亮显示。
+    ToggleHover,
+    /// 切换 HUD 坐标显示。
+    ToggleCursor,
 	/// Shift Map 模式 Blank <-> Wrap。
 	ToggleShiftMode,
 }
@@ -104,8 +108,6 @@ pub struct MenuItem;
 #[derive(Resource)]
 pub struct UiState {
     pub built_for_tileset_path: String,
-    pub palette_page: u32,
-    pub built_palette_page: u32,
     pub palette_tile_px: f32,
     pub built_palette_tile_px: f32,
     pub built_palette_filter: String,
@@ -120,8 +122,6 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             built_for_tileset_path: String::new(),
-            palette_page: 0,
-            built_palette_page: u32::MAX,
             palette_tile_px: 40.0,
             built_palette_tile_px: -1.0,
             built_palette_filter: String::new(),
@@ -220,6 +220,34 @@ impl Default for MapSizeInput {
             width_buf: "40".to_string(),
             height_buf: "25".to_string(),
             focus: MapSizeFocus::None,
+            apply_requested: false,
+        }
+    }
+}
+
+// --- 图层重命名输入 ---
+
+#[derive(Component)]
+pub struct LayerNameField;
+
+#[derive(Component)]
+pub struct LayerNameText;
+
+#[derive(Component)]
+pub struct LayerNameApplyButton;
+
+#[derive(Resource)]
+pub struct LayerNameInput {
+    pub buf: String,
+    pub focused: bool,
+    pub apply_requested: bool,
+}
+
+impl Default for LayerNameInput {
+    fn default() -> Self {
+        Self {
+            buf: String::new(),
+            focused: false,
             apply_requested: false,
         }
     }
