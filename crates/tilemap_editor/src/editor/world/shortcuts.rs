@@ -1,24 +1,23 @@
 use bevy::prelude::*;
 
 use crate::editor::types::{
-    CellChange, EditCommand, EditorConfig, EditorState, MapSizeFocus, MapSizeInput, TileEntities,
-    BrushSettings, TileMapData, TilesetLibrary, TilesetRuntime, ToolKind, ToolState, UndoStack,
-    PaletteSearchInput, LayerNameInput,
+    CellChange, EditCommand, EditorConfig, EditorState, MapSizeFocus, MapSizeInput, BrushSettings,
+    TileMapData, TilesetLibrary, TilesetRuntime, ToolKind, ToolState, UndoStack, PaletteSearchInput,
+    LayerNameInput,
 };
 
-use super::apply_map_to_entities;
+use super::{apply_tile_change, TilemapRenderParams};
 
 /// 键盘快捷键：选择 tile（[ / ]）+ 清空地图（R）。
 pub fn keyboard_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     lib: Res<TilesetLibrary>,
     runtime: Res<TilesetRuntime>,
+    config: Res<EditorConfig>,
     mut state: ResMut<EditorState>,
     mut undo: ResMut<UndoStack>,
-    tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     map: Option<ResMut<TileMapData>>,
-    config: Res<EditorConfig>,
+    mut render: TilemapRenderParams,
 ) {
     let tile_count = lib
         .active_id
@@ -37,12 +36,19 @@ pub fn keyboard_shortcuts(
 
     // 清空地图（做成可 Undo 的命令）。
     if keys.just_pressed(KeyCode::KeyR) {
-        if let (Some(tile_entities), Some(mut map)) = (tile_entities.as_deref(), map) {
+        if let Some(mut map) = map {
             let mut changes: Vec<CellChange> = Vec::new();
+            let layer_len = map.layer_len();
+            let map_width = map.width as usize;
             for (idx, cell) in map.tiles.iter_mut().enumerate() {
                 let before = cell.clone();
                 if before.is_some() {
                     *cell = None;
+                    let layer = (idx / layer_len) as u32;
+                    let local = idx % layer_len;
+                    let x = (local % map_width) as u32;
+                    let y = (local / map_width) as u32;
+                    apply_tile_change(&mut render, &config, layer, x, y, &before, &None);
                     changes.push(CellChange {
                         idx,
                         before,
@@ -51,7 +57,6 @@ pub fn keyboard_shortcuts(
                 }
             }
             undo.push(EditCommand { changes });
-            apply_map_to_entities(&runtime, &map, tile_entities, &mut tiles_q, &config);
         }
     }
 }

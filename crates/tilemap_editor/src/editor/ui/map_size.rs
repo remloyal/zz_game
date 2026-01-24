@@ -1,14 +1,14 @@
 //! 地图尺寸输入控件：交互、键盘输入、应用尺寸变更。
 
 use bevy::prelude::*;
+use bevy_ecs_tilemap::prelude::TilemapId;
 
 use crate::editor::{UI_BUTTON, UI_BUTTON_HOVER, UI_BUTTON_PRESS, UI_HIGHLIGHT};
 use crate::editor::types::{
     EditorConfig, MapSizeApplyButton, MapSizeFocus, MapSizeHeightField, MapSizeHeightText,
-    MapSizeInput, MapSizeWidthField, MapSizeWidthText, TileEntities, TileMapData, TilesetRuntime,
-    UndoStack,
+    MapSizeInput, MapSizeWidthField, MapSizeWidthText, TileMapData, UndoStack,
 };
-use crate::editor::world::apply_map_to_entities;
+use crate::editor::world::{rebuild_tilemaps, TilemapRenderParams};
 
 use super::util::resized_map_copy;
 use crate::editor::util::despawn_silently;
@@ -204,12 +204,10 @@ pub fn update_map_size_field_text(
 }
 
 pub fn apply_custom_map_size(
-    mut commands: Commands,
+    mut render: TilemapRenderParams,
     mut input: ResMut<MapSizeInput>,
     mut config: ResMut<EditorConfig>,
-    runtime: Res<TilesetRuntime>,
-    existing_tiles: Option<Res<TileEntities>>,
-    mut sprite_vis_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    tile_q: Query<Entity, With<TilemapId>>,
     map: Option<ResMut<TileMapData>>,
     mut undo: ResMut<UndoStack>,
 ) {
@@ -232,17 +230,40 @@ pub fn apply_custom_map_size(
     let new_map = resized_map_copy(old_map, width, height);
 
     config.map_size = UVec2::new(width, height);
-    commands.insert_resource(new_map.clone());
+    render.commands.insert_resource(new_map.clone());
     undo.clear();
 
     // 重建格子实体
-    if let Some(existing_tiles) = existing_tiles.as_deref() {
-        for &e in &existing_tiles.entities {
-            despawn_silently(&mut commands, e);
+    if let Some(existing_tiles) = render.tile_entities.as_deref() {
+        for e in existing_tiles.all_tilemap_entities() {
+            despawn_silently(&mut render.commands, e);
         }
     }
-    commands.remove_resource::<TileEntities>();
-    let tiles = crate::editor::tileset::spawn_map_entities_with_layers(&mut commands, &config, new_map.layers);
-    apply_map_to_entities(&runtime, &new_map, &tiles, &mut sprite_vis_q, &config);
-    commands.insert_resource(tiles);
+    for e in tile_q.iter() {
+        despawn_silently(&mut render.commands, e);
+    }
+    let mut tiles = crate::editor::tileset::spawn_map_entities_with_layers(
+        &mut render.commands,
+        &config,
+        new_map.layers,
+    );
+    {
+        let TilemapRenderParams {
+            commands,
+            tile_entities: _,
+            runtime,
+            tile_storage_q,
+            ..
+        } = &mut render;
+        rebuild_tilemaps(
+            commands,
+            &tile_q,
+            runtime,
+            &new_map,
+            &mut tiles,
+            tile_storage_q,
+            &config,
+        );
+    }
+    render.commands.insert_resource(tiles);
 }

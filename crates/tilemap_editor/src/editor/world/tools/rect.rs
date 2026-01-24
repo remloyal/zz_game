@@ -3,12 +3,12 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::editor::types::{
-    CellChange, ContextMenuState, EditCommand, EditorConfig, EditorState, LayerState, TileEntities,
-    TileMapData, TileRef, TilesetLibrary, TilesetRuntime, ToolKind, ToolState, UndoStack,
+    CellChange, ContextMenuState, EditCommand, EditorConfig, EditorState, LayerState, TileMapData,
+    TileRef, TilesetLibrary, ToolKind, ToolState, UndoStack,
     WorldCamera,
 };
 
-use super::super::{apply_tile_visual, cursor_tile_pos};
+use super::super::{apply_tile_change, cursor_tile_pos, TilemapRenderParams};
 
 pub struct RectDragState {
     pub active: bool,
@@ -29,10 +29,8 @@ pub(crate) struct RectWithMouseParams<'w, 's> {
     config: Res<'w, EditorConfig>,
     state: Res<'w, EditorState>,
     lib: Res<'w, TilesetLibrary>,
-    runtime: Res<'w, TilesetRuntime>,
     map: Option<ResMut<'w, TileMapData>>,
-    tile_entities: Option<Res<'w, TileEntities>>,
-    tiles_q: Query<'w, 's, (&'static mut Sprite, &'static mut Transform, &'static mut Visibility)>,
+    render: TilemapRenderParams<'w, 's>,
     undo: ResMut<'w, UndoStack>,
 }
 
@@ -60,10 +58,8 @@ pub fn rect_with_mouse(mut gizmos: Gizmos, params: RectWithMouseParams, mut drag
         config,
         state,
         lib,
-        runtime,
         map,
-        tile_entities,
-        mut tiles_q,
+        mut render,
         mut undo,
     } = params;
 
@@ -91,9 +87,6 @@ pub fn rect_with_mouse(mut gizmos: Gizmos, params: RectWithMouseParams, mut drag
     let Some(mut map) = map else {
         return;
     };
-    let Some(tile_entities) = tile_entities else {
-        return;
-    };
     let Ok(window) = windows.single() else {
         return;
     };
@@ -110,8 +103,8 @@ pub fn rect_with_mouse(mut gizmos: Gizmos, params: RectWithMouseParams, mut drag
         camera,
         camera_transform,
         &config,
-        tile_entities.width,
-        tile_entities.height,
+        map.width,
+        map.height,
     );
 
     let layer = layer_state.active.min(map.layers.saturating_sub(1));
@@ -120,11 +113,6 @@ pub fn rect_with_mouse(mut gizmos: Gizmos, params: RectWithMouseParams, mut drag
         .get(layer as usize)
         .map(|d| d.locked)
         .unwrap_or(false);
-    let layer_visible = map
-        .layer_data
-        .get(layer as usize)
-        .map(|d| d.visible)
-        .unwrap_or(true);
     if layer_locked {
         drag.active = false;
         return;
@@ -199,8 +187,7 @@ pub fn rect_with_mouse(mut gizmos: Gizmos, params: RectWithMouseParams, mut drag
     for y in min_y..=max_y {
         for x in min_x..=max_x {
             let idx = map.idx_layer(layer, x, y);
-            let entity_idx = tile_entities.idx_layer(layer, x, y);
-            if idx >= map.tiles.len() || entity_idx >= tile_entities.entities.len() {
+            if idx >= map.tiles.len() {
                 continue;
             }
             if map.tiles[idx] == desired {
@@ -216,13 +203,7 @@ pub fn rect_with_mouse(mut gizmos: Gizmos, params: RectWithMouseParams, mut drag
             });
 
             // 局部刷新渲染
-            let entity = tile_entities.entities[entity_idx];
-            if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
-                apply_tile_visual(&runtime, &desired, &mut sprite, &mut tf, &mut vis, &config);
-                if !layer_visible {
-                    *vis = Visibility::Hidden;
-                }
-            }
+            apply_tile_change(&mut render, &config, layer, x, y, &before, &desired);
         }
     }
 

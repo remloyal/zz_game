@@ -6,12 +6,13 @@ use std::collections::HashSet;
 
 use crate::editor::types::{
     CellChange, ContextMenuState, EditCommand, EditorConfig, LayerState, SelectionMovePreviewTile,
-    SelectionRect, SelectionState, TileEntities, TileMapData, TileRef, TilesetRuntime, ToolKind,
-    ToolState, UndoStack, WorldCamera,
+    SelectionRect, SelectionState, TileMapData, TileRef, TilesetRuntime, ToolKind, ToolState,
+    UndoStack, WorldCamera,
 };
+use crate::editor::tileset::rect_for_tile_index;
 use crate::editor::util::despawn_silently;
 
-use super::{apply_tile_visual, cursor_tile_pos, tile_world_center};
+use super::{apply_tile_change, cursor_tile_pos, tile_world_center, TilemapRenderParams};
 
 #[derive(SystemParam)]
 pub(in crate::editor) struct SelectionMoveParams<'w, 's> {
@@ -23,15 +24,8 @@ pub(in crate::editor) struct SelectionMoveParams<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     camera_q: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<WorldCamera>>,
     config: Res<'w, EditorConfig>,
-    runtime: Res<'w, TilesetRuntime>,
     map: Option<ResMut<'w, TileMapData>>,
-    tile_entities: Option<Res<'w, TileEntities>>,
-    tiles_q: Query<
-        'w,
-        's,
-        (&'static mut Sprite, &'static mut Transform, &'static mut Visibility),
-        Without<SelectionMovePreviewTile>,
-    >,
+    render: TilemapRenderParams<'w, 's>,
     undo: ResMut<'w, UndoStack>,
     selection: ResMut<'w, SelectionState>,
     preview_q: Query<
@@ -60,6 +54,41 @@ fn point_in_rect(p: UVec2, r: SelectionRect) -> bool {
 
 fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32 {
     v.max(lo).min(hi)
+}
+
+fn apply_preview_tile_visual(
+    runtime: &TilesetRuntime,
+    tile: &Option<TileRef>,
+    sprite: &mut Sprite,
+    tf: &mut Transform,
+    vis: &mut Visibility,
+    config: &EditorConfig,
+) {
+    match tile {
+        Some(TileRef { tileset_id, index, rot, flip_x, flip_y }) => {
+            let Some(atlas) = runtime.by_id.get(tileset_id) else {
+                sprite.rect = None;
+                sprite.flip_x = false;
+                sprite.flip_y = false;
+                tf.rotation = Quat::IDENTITY;
+                *vis = Visibility::Hidden;
+                return;
+            };
+            sprite.image = atlas.texture.clone();
+            sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
+            sprite.flip_x = *flip_x;
+            sprite.flip_y = *flip_y;
+            let r = (*rot % 4) as f32;
+            tf.rotation = Quat::from_rotation_z(-r * std::f32::consts::FRAC_PI_2);
+            *vis = Visibility::Visible;
+        }
+        None => {
+            sprite.flip_x = false;
+            sprite.flip_y = false;
+            tf.rotation = Quat::IDENTITY;
+            *vis = Visibility::Hidden;
+        }
+    }
 }
 
 fn rect_shift(rect: SelectionRect, dx: i32, dy: i32) -> SelectionRect {
@@ -91,10 +120,8 @@ pub fn selection_move_with_mouse(
         windows,
         camera_q,
         config,
-        runtime,
         map,
-        tile_entities,
-        mut tiles_q,
+        mut render,
         mut undo,
         mut selection,
         mut preview_q,
@@ -107,9 +134,7 @@ pub fn selection_move_with_mouse(
                 *v = Visibility::Hidden;
             }
         }
-        selection.moving = false;
     }
-
     if tools.tool != ToolKind::Select {
         drag.active = false;
         selection.moving = false;
@@ -143,11 +168,6 @@ pub fn selection_move_with_mouse(
         selection.moving = false;
         return;
     };
-    let Some(tile_entities) = tile_entities else {
-        drag.active = false;
-        selection.moving = false;
-        return;
-    };
     let Ok(window) = windows.single() else {
         return;
     };
@@ -164,8 +184,8 @@ pub fn selection_move_with_mouse(
         camera,
         camera_transform,
         &config,
-        tile_entities.width,
-        tile_entities.height,
+        map.width,
+        map.height,
     );
 
     // 开始拖拽：必须点击在当前选区内。
@@ -179,9 +199,7 @@ pub fn selection_move_with_mouse(
         if !point_in_rect(pos, rect) {
             return;
         }
-
         let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-        drag.active = true;
         drag.copy = ctrl;
         drag.start = pos;
         drag.current = pos;
@@ -264,7 +282,7 @@ pub fn selection_move_with_mouse(
             let dst_x = new_rect.min.x + cx;
             let dst_y = new_rect.min.y + cy;
             tf.translation = tile_world_center(dst_x, dst_y, config.tile_size, 6.0);
-            apply_tile_visual(&runtime, &drag.buf[i], &mut sprite, &mut tf, &mut vis, &config);
+            apply_preview_tile_visual(&render.runtime, &drag.buf[i], &mut sprite, &mut tf, &mut vis, &config);
             sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.60);
         }
     }
@@ -341,14 +359,7 @@ pub fn selection_move_with_mouse(
         let local = ch.idx.saturating_sub(layer_offset);
         let x = (local % map.width as usize) as u32;
         let y = (local / map.width as usize) as u32;
-        let entity_idx = tile_entities.idx_layer(layer, x, y);
-        if entity_idx >= tile_entities.entities.len() {
-            continue;
-        }
-        let entity = tile_entities.entities[entity_idx];
-        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
-            apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
-        }
+        apply_tile_change(&mut render, &config, layer, x, y, &ch.before, &ch.after);
     }
 
     undo.push(cmd);

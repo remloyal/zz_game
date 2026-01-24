@@ -4,11 +4,11 @@ use bevy::window::PrimaryWindow;
 use crate::editor::types::{
     CellChange, Clipboard, ContextMenuAction, ContextMenuCommand, ContextMenuState, EditCommand,
     EditorConfig, LayerState, PasteState, SelectionRect, SelectionState, TileEntities, TileMapData,
-    TilesetRuntime, ToolKind, ToolState, UndoStack, WorldCamera,
+    ToolKind, ToolState, UndoStack, WorldCamera,
 };
 use crate::editor::{LEFT_PANEL_WIDTH_PX, UI_TOP_RESERVED_PX};
 
-use super::{apply_map_to_entities, apply_tile_visual, cursor_tile_pos};
+use super::{apply_tile_change, cursor_tile_pos, TilemapRenderParams};
 
 /// 右键菜单：先支持粘贴模式的变换控制（后续可扩展到其他工具）。
 pub fn context_menu_open_close(
@@ -95,10 +95,8 @@ pub(super) fn clear_selection_to_none(
     layer: u32,
     rect: SelectionRect,
     map: &mut TileMapData,
-    runtime: &TilesetRuntime,
     config: &EditorConfig,
-    tile_entities: &TileEntities,
-    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    render: &mut TilemapRenderParams,
     undo: &mut UndoStack,
 ) {
     let mut cmd = EditCommand::default();
@@ -124,14 +122,7 @@ pub(super) fn clear_selection_to_none(
         let local = ch.idx.saturating_sub(layer_offset);
         let x = (local % map.width as usize) as u32;
         let y = (local / map.width as usize) as u32;
-        let entity_idx = tile_entities.idx_layer(layer, x, y);
-        if entity_idx >= tile_entities.entities.len() {
-            continue;
-        }
-        let entity = tile_entities.entities[entity_idx];
-        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
-            apply_tile_visual(runtime, &ch.after, &mut sprite, &mut tf, &mut vis, config);
-        }
+        apply_tile_change(render, config, layer, x, y, &ch.before, &ch.after);
     }
     undo.push(cmd);
 }
@@ -143,12 +134,10 @@ pub fn apply_context_menu_command(
     mut selection: ResMut<SelectionState>,
     mut clipboard: ResMut<Clipboard>,
     menu: Res<ContextMenuState>,
-    runtime: Res<TilesetRuntime>,
     config: Res<EditorConfig>,
     layer_state: Res<LayerState>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    mut render: TilemapRenderParams,
     mut undo: ResMut<UndoStack>,
 ) {
     let Some(action) = cmd.action.take() else {
@@ -160,40 +149,42 @@ pub fn apply_context_menu_command(
             let Some(mut map) = map else {
                 return;
             };
-            let Some(tile_entities) = tile_entities.as_deref() else {
-                return;
-            };
-
             let Some(cmd) = undo.undo.pop() else {
                 return;
             };
+            let layer_len = map.layer_len();
             for ch in &cmd.changes {
                 if ch.idx < map.tiles.len() {
                     map.tiles[ch.idx] = ch.before.clone();
+                    let layer = (ch.idx / layer_len) as u32;
+                    let local = ch.idx % layer_len;
+                    let x = (local % map.width as usize) as u32;
+                    let y = (local / map.width as usize) as u32;
+                    apply_tile_change(&mut render, &config, layer, x, y, &ch.after, &ch.before);
                 }
             }
             undo.redo.push(cmd);
-            apply_map_to_entities(&runtime, &map, tile_entities, &mut tiles_q, &config);
             info!("context cmd: undo");
         }
         ContextMenuAction::Redo => {
             let Some(mut map) = map else {
                 return;
             };
-            let Some(tile_entities) = tile_entities.as_deref() else {
-                return;
-            };
-
             let Some(cmd) = undo.redo.pop() else {
                 return;
             };
+            let layer_len = map.layer_len();
             for ch in &cmd.changes {
                 if ch.idx < map.tiles.len() {
                     map.tiles[ch.idx] = ch.after.clone();
+                    let layer = (ch.idx / layer_len) as u32;
+                    let local = ch.idx % layer_len;
+                    let x = (local % map.width as usize) as u32;
+                    let y = (local / map.width as usize) as u32;
+                    apply_tile_change(&mut render, &config, layer, x, y, &ch.before, &ch.after);
                 }
             }
             undo.undo.push(cmd);
-            apply_map_to_entities(&runtime, &map, tile_entities, &mut tiles_q, &config);
             info!("context cmd: redo");
         }
         ContextMenuAction::EnterPaste => {
@@ -228,24 +219,12 @@ pub fn apply_context_menu_command(
             let Some(mut map) = map else {
                 return;
             };
-            let Some(tile_entities) = tile_entities.as_deref() else {
-                return;
-            };
             let Some(rect) = selection.rect else {
                 return;
             };
             let layer = layer_state.active.min(map.layers.saturating_sub(1));
             copy_selection_to_clipboard(layer, rect, &map, &mut clipboard);
-            clear_selection_to_none(
-                layer,
-                rect,
-                &mut map,
-                &runtime,
-                &config,
-                tile_entities,
-                &mut tiles_q,
-                &mut undo,
-            );
+            clear_selection_to_none(layer, rect, &mut map, &config, &mut render, &mut undo);
             tools.tool = ToolKind::Select;
             info!("context cmd: selection cut {}x{}", clipboard.width, clipboard.height);
         }
@@ -253,23 +232,11 @@ pub fn apply_context_menu_command(
             let Some(mut map) = map else {
                 return;
             };
-            let Some(tile_entities) = tile_entities.as_deref() else {
-                return;
-            };
             let Some(rect) = selection.rect else {
                 return;
             };
             let layer = layer_state.active.min(map.layers.saturating_sub(1));
-            clear_selection_to_none(
-                layer,
-                rect,
-                &mut map,
-                &runtime,
-                &config,
-                tile_entities,
-                &mut tiles_q,
-                &mut undo,
-            );
+            clear_selection_to_none(layer, rect, &mut map, &config, &mut render, &mut undo);
             tools.tool = ToolKind::Select;
             info!("context cmd: selection delete");
         }
@@ -309,11 +276,9 @@ pub fn apply_context_menu_command(
                 &mut paste,
                 &clipboard,
                 &menu,
-                &runtime,
                 &config,
                 map,
-                tile_entities.as_deref(),
-                &mut tiles_q,
+                &mut render,
                 &mut undo,
             );
         }

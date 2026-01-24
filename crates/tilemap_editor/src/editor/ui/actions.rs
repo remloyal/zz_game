@@ -1,32 +1,31 @@
 //! 左侧工具栏 ActionButton 的点击处理（打开/新建/保存/读取/导入/导出等）。
 
 use bevy::prelude::*;
+use bevy_ecs_tilemap::prelude::TilemapId;
 
 use crate::editor::persistence::{load_map_from_file, save_map_to_file};
 use crate::editor::tileset::{merge_tilesets_from_map, open_tileset_impl, save_tileset_library};
 use crate::editor::types::{
-    ActionButton, ActionKind, EditorConfig, TileEntities, TileMapData, TilesetLibrary, TilesetLoading,
-	ShiftMapMode, ShiftMapSettings, TilesetRuntime, UiState, UndoStack,
+    ActionButton, ActionKind, EditorConfig, TileMapData, TilesetLibrary, TilesetLoading,
+    ShiftMapMode, ShiftMapSettings, UiState, UndoStack,
 };
 use crate::editor::util::despawn_silently;
-use crate::editor::world::apply_map_to_entities;
+use crate::editor::world::{apply_tile_change, rebuild_tilemaps, TilemapRenderParams};
 use crate::editor::{UI_BUTTON, UI_BUTTON_HOVER, UI_BUTTON_PRESS};
 
 use super::util::resized_map_copy;
 
 /// 左侧工具栏按钮点击处理。
 pub fn action_button_click(
-    mut commands: Commands,
+    mut render: TilemapRenderParams,
     mut action_q: Query<(&Interaction, &ActionButton, &mut BackgroundColor), Changed<Interaction>>,
     asset_server: Res<AssetServer>,
     mut config: ResMut<EditorConfig>,
     mut lib: ResMut<TilesetLibrary>,
     mut tileset_loading: ResMut<TilesetLoading>,
-    runtime: Res<TilesetRuntime>,
-    tile_entities: Option<Res<TileEntities>>,
     mut ui_state: ResMut<UiState>,
     mut shift: ResMut<ShiftMapSettings>,
-    mut sprite_vis_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    tile_q: Query<Entity, With<TilemapId>>,
     map: Option<ResMut<TileMapData>>,
     mut undo: ResMut<UndoStack>,
 ) {
@@ -53,34 +52,44 @@ pub fn action_button_click(
 
     match requested {
         ActionKind::Undo => {
-            let (Some(mut map), Some(tile_entities)) = (map, tile_entities) else {
+            let Some(mut map) = map else {
                 return;
             };
             let Some(cmd) = undo.undo.pop() else {
                 return;
             };
+            let layer_len = map.layer_len();
             for ch in &cmd.changes {
                 if ch.idx < map.tiles.len() {
                     map.tiles[ch.idx] = ch.before.clone();
+                    let layer = (ch.idx / layer_len) as u32;
+                    let local = ch.idx % layer_len;
+                    let x = (local % map.width as usize) as u32;
+                    let y = (local / map.width as usize) as u32;
+                    apply_tile_change(&mut render, &config, layer, x, y, &ch.after, &ch.before);
                 }
             }
             undo.redo.push(cmd);
-            apply_map_to_entities(&runtime, &map, &tile_entities, &mut sprite_vis_q, &config);
         }
         ActionKind::Redo => {
-            let (Some(mut map), Some(tile_entities)) = (map, tile_entities) else {
+            let Some(mut map) = map else {
                 return;
             };
             let Some(cmd) = undo.redo.pop() else {
                 return;
             };
+            let layer_len = map.layer_len();
             for ch in &cmd.changes {
                 if ch.idx < map.tiles.len() {
                     map.tiles[ch.idx] = ch.after.clone();
+                    let layer = (ch.idx / layer_len) as u32;
+                    let local = ch.idx % layer_len;
+                    let x = (local % map.width as usize) as u32;
+                    let y = (local / map.width as usize) as u32;
+                    apply_tile_change(&mut render, &config, layer, x, y, &ch.before, &ch.after);
                 }
             }
             undo.undo.push(cmd);
-            apply_map_to_entities(&runtime, &map, &tile_entities, &mut sprite_vis_q, &config);
         }
         ActionKind::ToggleGrid => {
             config.show_grid = !config.show_grid;
@@ -127,31 +136,87 @@ pub fn action_button_click(
 
             // 尺寸变化：更新 config + 重建格子实体
             if config.map_size.x != loaded.width || config.map_size.y != loaded.height {
-                if let Some(existing_tiles) = tile_entities.as_deref() {
-                    for &e in &existing_tiles.entities {
-                        despawn_silently(&mut commands, e);
+                if let Some(existing_tiles) = render.tile_entities.as_deref() {
+                    for e in existing_tiles.all_tilemap_entities() {
+                        despawn_silently(&mut render.commands, e);
                     }
                 }
-                commands.remove_resource::<TileEntities>();
-                commands.remove_resource::<TileMapData>();
+                for e in tile_q.iter() {
+                    despawn_silently(&mut render.commands, e);
+                }
 
                 config.map_size = UVec2::new(loaded.width, loaded.height);
-                let tiles = crate::editor::tileset::spawn_map_entities_with_layers(&mut commands, &config, loaded.layers);
-                commands.insert_resource(loaded.clone());
-                apply_map_to_entities(&runtime, &loaded, &tiles, &mut sprite_vis_q, &config);
-                commands.insert_resource(tiles);
+                let mut tiles = crate::editor::tileset::spawn_map_entities_with_layers(
+                    &mut render.commands,
+                    &config,
+                    loaded.layers,
+                );
+                render.commands.insert_resource(loaded.clone());
+                {
+                    let TilemapRenderParams {
+                        commands,
+                        tile_entities: _,
+                        runtime,
+                        tile_storage_q,
+                        ..
+                    } = &mut render;
+                    rebuild_tilemaps(
+                        commands,
+                        &tile_q,
+                        runtime,
+                        &loaded,
+                        &mut tiles,
+                        tile_storage_q,
+                        &config,
+                    );
+                }
+                render.commands.insert_resource(tiles);
                 return;
             }
 
-            commands.insert_resource(loaded.clone());
-            if let Some(tile_entities) = tile_entities.as_deref() {
-                apply_map_to_entities(&runtime, &loaded, tile_entities, &mut sprite_vis_q, &config);
+            render.commands.insert_resource(loaded.clone());
+            {
+                let TilemapRenderParams {
+                    commands,
+                    tile_entities,
+                    runtime,
+                    tile_storage_q,
+                    ..
+                } = &mut render;
+                if let Some(tile_entities) = tile_entities.as_mut() {
+                    rebuild_tilemaps(
+                        commands,
+                        &tile_q,
+                        runtime,
+                        &loaded,
+                        &mut *tile_entities,
+                        tile_storage_q,
+                        &config,
+                    );
+                }
             }
         }
         ActionKind::NewMap => {
-            if let (Some(tile_entities), Some(mut map)) = (tile_entities.as_deref(), map) {
+            if let Some(mut map) = map {
                 *map = TileMapData::new(map.width, map.height);
-                apply_map_to_entities(&runtime, &map, tile_entities, &mut sprite_vis_q, &config);
+                let TilemapRenderParams {
+                    commands,
+                    tile_entities,
+                    runtime,
+                    tile_storage_q,
+                    ..
+                } = &mut render;
+                if let Some(tile_entities) = tile_entities.as_mut() {
+                    rebuild_tilemaps(
+                        commands,
+                        &tile_q,
+                        runtime,
+                        &map,
+                        &mut *tile_entities,
+                        tile_storage_q,
+                        &config,
+                    );
+                }
             }
         }
         ActionKind::SetMapSize { width, height } => {
@@ -163,19 +228,42 @@ pub fn action_button_click(
             let new_map = resized_map_copy(old_map, width, height);
 
             config.map_size = UVec2::new(width, height);
-            commands.insert_resource(new_map.clone());
+            render.commands.insert_resource(new_map.clone());
             undo.clear();
 
             // 重建格子实体
-            if let Some(existing_tiles) = tile_entities.as_deref() {
-                for &e in &existing_tiles.entities {
-                    despawn_silently(&mut commands, e);
+            if let Some(existing_tiles) = render.tile_entities.as_deref() {
+                for e in existing_tiles.all_tilemap_entities() {
+                    despawn_silently(&mut render.commands, e);
                 }
             }
-            commands.remove_resource::<TileEntities>();
-            let tiles = crate::editor::tileset::spawn_map_entities_with_layers(&mut commands, &config, new_map.layers);
-            apply_map_to_entities(&runtime, &new_map, &tiles, &mut sprite_vis_q, &config);
-            commands.insert_resource(tiles);
+            for e in tile_q.iter() {
+                despawn_silently(&mut render.commands, e);
+            }
+            let mut tiles = crate::editor::tileset::spawn_map_entities_with_layers(
+                &mut render.commands,
+                &config,
+                new_map.layers,
+            );
+            {
+                let TilemapRenderParams {
+                    commands,
+                    tile_entities: _,
+                    runtime,
+                    tile_storage_q,
+                    ..
+                } = &mut render;
+                rebuild_tilemaps(
+                    commands,
+                    &tile_q,
+                    runtime,
+                    &new_map,
+                    &mut tiles,
+                    tile_storage_q,
+                    &config,
+                );
+            }
+            render.commands.insert_resource(tiles);
         }
         ActionKind::ImportMap => {
             let Some(path) = rfd::FileDialog::new()
@@ -199,28 +287,65 @@ pub fn action_button_click(
 
             // 尺寸变化：更新 config + 重建格子实体
             if config.map_size.x != loaded.width || config.map_size.y != loaded.height {
-                if let Some(existing_tiles) = tile_entities.as_deref() {
-                    for &e in &existing_tiles.entities {
-                        despawn_silently(&mut commands, e);
+                if let Some(existing_tiles) = render.tile_entities.as_deref() {
+                    for e in existing_tiles.all_tilemap_entities() {
+                        despawn_silently(&mut render.commands, e);
                     }
                 }
-                commands.remove_resource::<TileEntities>();
-                commands.remove_resource::<TileMapData>();
+                for e in tile_q.iter() {
+                    despawn_silently(&mut render.commands, e);
+                }
 
                 config.map_size = UVec2::new(loaded.width, loaded.height);
-                let tiles = crate::editor::tileset::spawn_map_entities_with_layers(&mut commands, &config, loaded.layers);
-                commands.insert_resource(loaded.clone());
-                apply_map_to_entities(&runtime, &loaded, &tiles, &mut sprite_vis_q, &config);
-                commands.insert_resource(tiles);
+                let mut tiles = crate::editor::tileset::spawn_map_entities_with_layers(
+                    &mut render.commands,
+                    &config,
+                    loaded.layers,
+                );
+                render.commands.insert_resource(loaded.clone());
+                {
+                    let TilemapRenderParams {
+                        commands,
+                        tile_entities: _,
+                        runtime,
+                        tile_storage_q,
+                        ..
+                    } = &mut render;
+                    rebuild_tilemaps(
+                        commands,
+                        &tile_q,
+                        runtime,
+                        &loaded,
+                        &mut tiles,
+                        tile_storage_q,
+                        &config,
+                    );
+                }
+                render.commands.insert_resource(tiles);
                 return;
             }
 
             // 更新地图数据（下一帧由绘制系统继续使用）
-            commands.insert_resource(loaded.clone());
-
-            // 若当前系统参数里已有 tile_entities，则本帧直接刷新可见性
-            if let Some(tile_entities) = tile_entities.as_deref() {
-                apply_map_to_entities(&runtime, &loaded, tile_entities, &mut sprite_vis_q, &config);
+            render.commands.insert_resource(loaded.clone());
+            {
+                let TilemapRenderParams {
+                    commands,
+                    tile_entities,
+                    runtime,
+                    tile_storage_q,
+                    ..
+                } = &mut render;
+                if let Some(tile_entities) = tile_entities.as_mut() {
+                    rebuild_tilemaps(
+                        commands,
+                        &tile_q,
+                        runtime,
+                        &loaded,
+                        &mut *tile_entities,
+                        tile_storage_q,
+                        &config,
+                    );
+                }
             }
         }
         ActionKind::ExportMap => {

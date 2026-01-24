@@ -6,13 +6,15 @@
 //!   会在多相机时失败，从而导致右侧无法绘制。
 
 use bevy::prelude::*;
+use bevy::ecs::system::SystemParam;
+use bevy_ecs_tilemap::prelude::*;
 
-use super::tileset::rect_for_tile_index;
 use super::types::{
     CellChange, EditCommand, EditorConfig, SelectionRect, TileEntities, TileMapData, TileRef,
     TilesetRuntime, UndoStack,
 };
 use super::{LEFT_PANEL_WIDTH_PX, UI_TOP_RESERVED_PX};
+use crate::editor::util::despawn_silently;
 
 mod layers;
 mod context_menu;
@@ -51,66 +53,227 @@ pub use context_menu::{apply_context_menu_command, context_menu_clear_consumptio
 pub use paste_apply::paste_with_mouse;
 pub use paste_preview::update_paste_preview;
 pub use paste_transform::paste_transform_shortcuts;
-pub use render_sync::{apply_map_to_entities, refresh_map_on_tileset_runtime_change};
-pub use render_sync::sync_layer_visibility_on_layer_data_change;
+pub use render_sync::{refresh_map_on_tileset_runtime_change, rebuild_tilemaps, sync_layer_visibility_on_layer_data_change};
 pub use selection_move::selection_move_with_mouse;
 pub use tools::{fill_with_mouse, paint_with_mouse, rect_with_mouse};
 
-fn apply_tile_visual(
-    runtime: &TilesetRuntime,
-    tile: &Option<TileRef>,
-    sprite: &mut Sprite,
-    tf: &mut Transform,
-    vis: &mut Visibility,
+#[derive(SystemParam)]
+pub struct TilemapRenderParams<'w, 's> {
+    pub commands: Commands<'w, 's>,
+    pub tile_entities: Option<ResMut<'w, TileEntities>>,
+    pub runtime: Res<'w, TilesetRuntime>,
+    pub tile_storage_q: Query<'w, 's, &'static mut TileStorage>,
+}
+
+pub(crate) fn apply_tile_change(
+    render: &mut TilemapRenderParams,
     config: &EditorConfig,
+    layer: u32,
+    x: u32,
+    y: u32,
+    before: &Option<TileRef>,
+    after: &Option<TileRef>,
 ) {
-    match tile {
-        Some(TileRef {
-            tileset_id,
-            index,
-            rot,
-            flip_x,
-            flip_y,
-        }) => {
-            let Some(atlas) = runtime.by_id.get(tileset_id) else {
-                sprite.rect = None;
-                sprite.flip_x = false;
-                sprite.flip_y = false;
-                tf.rotation = Quat::IDENTITY;
-                *vis = Visibility::Hidden;
-                return;
-            };
-            sprite.image = atlas.texture.clone();
-            sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
-            sprite.flip_x = *flip_x;
-            sprite.flip_y = *flip_y;
-            let r = (*rot % 4) as f32;
-            tf.rotation = Quat::from_rotation_z(-r * std::f32::consts::FRAC_PI_2);
-            *vis = Visibility::Visible;
-        }
-        None => {
-            sprite.flip_x = false;
-            sprite.flip_y = false;
-            tf.rotation = Quat::IDENTITY;
-            *vis = Visibility::Hidden;
+    let Some(tile_entities) = render.tile_entities.as_mut() else {
+        return;
+    };
+
+    if let Some(before_tile) = before {
+        if after.as_ref().map(|t| &t.tileset_id) != Some(&before_tile.tileset_id) {
+            remove_tile_from_tileset(
+                &mut render.commands,
+                &mut render.tile_storage_q,
+                tile_entities,
+                &before_tile.tileset_id,
+                layer,
+                x,
+                y,
+            );
         }
     }
+
+    if let Some(after_tile) = after {
+        set_tile_in_tileset(
+            &mut render.commands,
+            &mut render.tile_storage_q,
+            tile_entities,
+            &render.runtime,
+            config,
+            &after_tile.tileset_id,
+            layer,
+            x,
+            y,
+            after_tile,
+        );
+    } else if let Some(before_tile) = before {
+        remove_tile_from_tileset(
+            &mut render.commands,
+            &mut render.tile_storage_q,
+            tile_entities,
+            &before_tile.tileset_id,
+            layer,
+            x,
+            y,
+        );
+    }
+}
+
+fn ensure_tilemap_layer(
+    commands: &mut Commands,
+    tile_entities: &mut TileEntities,
+    runtime: &TilesetRuntime,
+    config: &EditorConfig,
+    tileset_id: &str,
+    layer: u32,
+) -> Option<Entity> {
+    let tileset_id = tileset_id.to_string();
+    if let Some(entity) = tile_entities.layer_entity(&tileset_id, layer) {
+        if entity != Entity::PLACEHOLDER {
+            return Some(entity);
+        }
+    }
+
+    let Some(rt) = runtime.by_id.get(&tileset_id) else {
+        return None;
+    };
+
+    let map_size = TilemapSize {
+        x: tile_entities.width,
+        y: tile_entities.height,
+    };
+    let tile_size = TilemapTileSize {
+        x: config.tile_size.x as f32,
+        y: config.tile_size.y as f32,
+    };
+    let grid_size = TilemapGridSize {
+        x: config.tile_size.x as f32,
+        y: config.tile_size.y as f32,
+    };
+    let storage = TileStorage::empty(map_size);
+    let order = tile_entities.tileset_index(&tileset_id);
+    let z = layer as f32 * 10.0 + order as f32 * 0.01;
+    let offset = Vec3::new(tile_size.x * 0.5, tile_size.y * 0.5, z);
+
+    let map_entity = commands.spawn_empty().id();
+    commands.entity(map_entity).insert(TilemapBundle {
+        size: map_size,
+        storage,
+        tile_size,
+        grid_size,
+        texture: TilemapTexture::Single(rt.texture.clone()),
+        transform: Transform::from_translation(offset),
+        ..Default::default()
+    });
+
+    tile_entities.set_layer_entity(tileset_id, layer, map_entity);
+    Some(map_entity)
+}
+
+fn remove_tile_from_tileset(
+    commands: &mut Commands,
+    tile_storage_q: &mut Query<&mut TileStorage>,
+    tile_entities: &mut TileEntities,
+    tileset_id: &str,
+    layer: u32,
+    x: u32,
+    y: u32,
+) {
+    let tileset_id = tileset_id.to_string();
+    let Some(map_entity) = tile_entities.layer_entity(&tileset_id, layer) else {
+        return;
+    };
+    let Ok(mut storage) = tile_storage_q.get_mut(map_entity) else {
+        return;
+    };
+    let pos = TilePos { x, y };
+    if let Some(tile_entity) = storage.get(&pos) {
+        despawn_silently(commands, tile_entity);
+        storage.remove(&pos);
+    }
+}
+
+fn set_tile_in_tileset(
+    commands: &mut Commands,
+    tile_storage_q: &mut Query<&mut TileStorage>,
+    tile_entities: &mut TileEntities,
+    runtime: &TilesetRuntime,
+    config: &EditorConfig,
+    tileset_id: &str,
+    layer: u32,
+    x: u32,
+    y: u32,
+    tile: &TileRef,
+) {
+    let Some(map_entity) = ensure_tilemap_layer(
+        commands,
+        tile_entities,
+        runtime,
+        config,
+        tileset_id,
+        layer,
+    ) else {
+        return;
+    };
+
+    let Ok(mut storage) = tile_storage_q.get_mut(map_entity) else {
+        return;
+    };
+    let pos = TilePos { x, y };
+    if let Some(tile_entity) = storage.get(&pos) {
+        commands.entity(tile_entity).insert(TileTextureIndex(tile.index));
+        commands.entity(tile_entity).insert(tile_flip_from_ref(tile));
+        return;
+    }
+
+    let tile_entity = commands
+        .spawn(TileBundle {
+            position: pos,
+            tilemap_id: TilemapId(map_entity),
+            texture_index: TileTextureIndex(tile.index),
+            flip: tile_flip_from_ref(tile),
+            ..Default::default()
+        })
+        .id();
+    storage.set(&pos, tile_entity);
+}
+
+fn tile_flip_from_ref(tile: &TileRef) -> TileFlip {
+    let mut flip = TileFlip {
+        x: tile.flip_x,
+        y: tile.flip_y,
+        d: false,
+    };
+    match tile.rot % 4 {
+        0 => {}
+        1 => {
+            flip.d = true;
+            flip.x = !flip.x;
+        }
+        2 => {
+            flip.x = !flip.x;
+            flip.y = !flip.y;
+        }
+        3 => {
+            flip.d = true;
+            flip.y = !flip.y;
+        }
+        _ => {}
+    }
+    flip
 }
 
 fn try_edit_single_map_tile<F>(
     map_pos: Option<UVec2>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<&TileEntities>,
-    runtime: &TilesetRuntime,
+    render: &mut TilemapRenderParams,
     config: &EditorConfig,
-    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     undo: &mut UndoStack,
     editor: F,
 ) -> bool
 where
     F: FnOnce(&mut TileRef),
 {
-    let (Some(pos), Some(mut map), Some(tile_entities)) = (map_pos, map, tile_entities) else {
+    let (Some(pos), Some(mut map)) = (map_pos, map) else {
         return false;
     };
     let Some(layer) = map.topmost_layer_at(pos.x, pos.y) else {
@@ -135,38 +298,27 @@ where
     undo.push(EditCommand {
         changes: vec![CellChange {
             idx,
-            before,
+            before: before.clone(),
             after: after.clone(),
         }],
     });
 
-    let entity_idx = tile_entities.idx_layer(layer, pos.x, pos.y);
-    if entity_idx >= tile_entities.entities.len() {
-        return true;
-    }
-    let entity = tile_entities.entities[entity_idx];
-    if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
-        apply_tile_visual(runtime, &after, &mut sprite, &mut tf, &mut vis, config);
-    }
+    apply_tile_change(render, config, layer, pos.x, pos.y, &before, &after);
     true
 }
 
 fn try_rotate_map_tile_ccw(
     map_pos: Option<UVec2>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<&TileEntities>,
-    runtime: &TilesetRuntime,
+    render: &mut TilemapRenderParams,
     config: &EditorConfig,
-    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     undo: &mut UndoStack,
 ) -> bool {
     try_edit_single_map_tile(
         map_pos,
         map,
-        tile_entities,
-        runtime,
+        render,
         config,
-        tiles_q,
         undo,
         |t| t.rot = (t.rot + 3) % 4,
     )
@@ -175,19 +327,15 @@ fn try_rotate_map_tile_ccw(
 fn try_rotate_map_tile_cw(
     map_pos: Option<UVec2>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<&TileEntities>,
-    runtime: &TilesetRuntime,
+    render: &mut TilemapRenderParams,
     config: &EditorConfig,
-    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     undo: &mut UndoStack,
 ) -> bool {
     try_edit_single_map_tile(
         map_pos,
         map,
-        tile_entities,
-        runtime,
+        render,
         config,
-        tiles_q,
         undo,
         |t| t.rot = (t.rot + 1) % 4,
     )
@@ -196,19 +344,15 @@ fn try_rotate_map_tile_cw(
 fn try_flip_map_tile_x(
     map_pos: Option<UVec2>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<&TileEntities>,
-    runtime: &TilesetRuntime,
+    render: &mut TilemapRenderParams,
     config: &EditorConfig,
-    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     undo: &mut UndoStack,
 ) -> bool {
     try_edit_single_map_tile(
         map_pos,
         map,
-        tile_entities,
-        runtime,
+        render,
         config,
-        tiles_q,
         undo,
         |t| t.flip_x = !t.flip_x,
     )
@@ -217,19 +361,15 @@ fn try_flip_map_tile_x(
 fn try_flip_map_tile_y(
     map_pos: Option<UVec2>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<&TileEntities>,
-    runtime: &TilesetRuntime,
+    render: &mut TilemapRenderParams,
     config: &EditorConfig,
-    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     undo: &mut UndoStack,
 ) -> bool {
     try_edit_single_map_tile(
         map_pos,
         map,
-        tile_entities,
-        runtime,
+        render,
         config,
-        tiles_q,
         undo,
         |t| t.flip_y = !t.flip_y,
     )
@@ -238,19 +378,15 @@ fn try_flip_map_tile_y(
 fn try_reset_map_tile_transform(
     map_pos: Option<UVec2>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<&TileEntities>,
-    runtime: &TilesetRuntime,
+    render: &mut TilemapRenderParams,
     config: &EditorConfig,
-    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     undo: &mut UndoStack,
 ) -> bool {
     try_edit_single_map_tile(
         map_pos,
         map,
-        tile_entities,
-        runtime,
+        render,
         config,
-        tiles_q,
         undo,
         |t| {
             t.rot = 0;

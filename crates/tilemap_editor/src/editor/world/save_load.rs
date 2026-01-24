@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_ecs_tilemap::prelude::{TileStorage, TilemapId};
 
 use crate::editor::persistence::{load_map_from_file, save_map_to_file};
 use crate::editor::tileset::{
@@ -10,7 +11,7 @@ use crate::editor::types::{
 };
 use crate::editor::util::despawn_silently;
 
-use super::apply_map_to_entities;
+use super::rebuild_tilemaps;
 
 /// 保存/读取快捷键：S / L。
 pub fn save_load_shortcuts(
@@ -21,8 +22,9 @@ pub fn save_load_shortcuts(
     mut lib: ResMut<TilesetLibrary>,
     mut tileset_loading: ResMut<TilesetLoading>,
     runtime: Res<TilesetRuntime>,
-    tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    tile_entities: Option<ResMut<TileEntities>>,
+    mut tile_storage_q: Query<&mut TileStorage>,
+    tile_q: Query<Entity, With<TilemapId>>,
     map: Option<ResMut<TileMapData>>,
     mut undo: ResMut<UndoStack>,
 ) {
@@ -50,29 +52,47 @@ pub fn save_load_shortcuts(
         save_tileset_library(&lib);
 
         let needs_resize = config.map_size.x != loaded.width || config.map_size.y != loaded.height;
-        let current_tile_entities = tile_entities.as_deref();
+        let current_tile_entities = tile_entities;
 
         if needs_resize {
-            if let Some(existing_tiles) = current_tile_entities {
-                for &e in &existing_tiles.entities {
+            if let Some(existing_tiles) = current_tile_entities.as_deref() {
+                for e in existing_tiles.all_tilemap_entities() {
                     despawn_silently(&mut commands, e);
                 }
             }
-            commands.remove_resource::<TileEntities>();
-            commands.remove_resource::<TileMapData>();
+            for e in tile_q.iter() {
+                despawn_silently(&mut commands, e);
+            }
 
             config.map_size = UVec2::new(loaded.width, loaded.height);
             let tiles = spawn_map_entities_with_layers(&mut commands, &config, loaded.layers);
             commands.insert_resource(loaded.clone());
-            apply_map_to_entities(&runtime, &loaded, &tiles, &mut tiles_q, &config);
+            let mut tiles = tiles;
+            rebuild_tilemaps(
+                &mut commands,
+                &tile_q,
+                &runtime,
+                &loaded,
+                &mut tiles,
+                &mut tile_storage_q,
+                &config,
+            );
             commands.insert_resource(tiles);
             undo.clear();
             return;
         }
 
         commands.insert_resource(loaded.clone());
-        if let Some(tile_entities) = tile_entities.as_deref() {
-            apply_map_to_entities(&runtime, &loaded, tile_entities, &mut tiles_q, &config);
+        if let Some(mut tile_entities) = current_tile_entities {
+            rebuild_tilemaps(
+                &mut commands,
+                &tile_q,
+                &runtime,
+                &loaded,
+                &mut tile_entities,
+                &mut tile_storage_q,
+                &config,
+            );
         }
         undo.clear();
     }

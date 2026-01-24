@@ -4,10 +4,10 @@ use bevy::window::PrimaryWindow;
 
 use crate::editor::types::{
     CellChange, Clipboard, ContextMenuState, EditCommand, EditorConfig, LayerState, PasteState,
-    TileEntities, TileMapData, TileRef, TilesetRuntime, ToolKind, ToolState, UndoStack, WorldCamera,
+    TileMapData, TileRef, ToolKind, ToolState, UndoStack, WorldCamera,
 };
 
-use super::{apply_tile_visual, cursor_tile_pos};
+use super::{apply_tile_change, cursor_tile_pos, TilemapRenderParams};
 use super::paste_helpers::{paste_dims, paste_dst_xy};
 
 #[derive(SystemParam)]
@@ -19,13 +19,11 @@ pub(in crate::editor) struct PasteWithMouseParams<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     camera_q: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<WorldCamera>>,
     config: Res<'w, EditorConfig>,
-    runtime: Res<'w, TilesetRuntime>,
     clipboard: Res<'w, Clipboard>,
     paste: Res<'w, PasteState>,
     menu: Res<'w, ContextMenuState>,
     map: Option<ResMut<'w, TileMapData>>,
-    tile_entities: Option<Res<'w, TileEntities>>,
-    tiles_q: Query<'w, 's, (&'static mut Sprite, &'static mut Transform, &'static mut Visibility)>,
+    render: TilemapRenderParams<'w, 's>,
     undo: ResMut<'w, UndoStack>,
 }
 
@@ -39,13 +37,11 @@ pub fn paste_with_mouse(params: PasteWithMouseParams) {
         windows,
         camera_q,
         config,
-        runtime,
         clipboard,
         paste,
         menu,
         map,
-        tile_entities,
-        mut tiles_q,
+        mut render,
         mut undo,
     } = params;
 
@@ -68,9 +64,6 @@ pub fn paste_with_mouse(params: PasteWithMouseParams) {
     let Some(mut map) = map else {
         return;
     };
-    let Some(tile_entities) = tile_entities else {
-        return;
-    };
 
     let layer = layer_state.active.min(map.layers.saturating_sub(1));
     let layer_locked = map
@@ -78,11 +71,6 @@ pub fn paste_with_mouse(params: PasteWithMouseParams) {
         .get(layer as usize)
         .map(|d| d.locked)
         .unwrap_or(false);
-    let layer_visible = map
-        .layer_data
-        .get(layer as usize)
-        .map(|d| d.visible)
-        .unwrap_or(true);
     if layer_locked {
         return;
     }
@@ -98,8 +86,8 @@ pub fn paste_with_mouse(params: PasteWithMouseParams) {
         camera,
         camera_transform,
         &config,
-        tile_entities.width,
-        tile_entities.height,
+        map.width,
+        map.height,
     ) else {
         return;
     };
@@ -111,19 +99,18 @@ pub fn paste_with_mouse(params: PasteWithMouseParams) {
         clipboard.width,
         clipboard.height,
         clipboard.tiles.len(),
-        paste.rot % 4,
+        paste.rot,
         paste.flip_x,
         paste.flip_y
     );
 
-    let mut cmd = EditCommand::default();
     let (pw, ph) = paste_dims(&clipboard, &paste);
+    let mut cmd = EditCommand::default();
     let mut attempted = 0u32;
     let mut oob = 0u32;
     let mut same = 0u32;
     let mut sampled = 0u32;
 
-    // 遍历源剪贴板 → 映射到变换后的目标坐标（这样旋转/翻转更直观且不易写错）。
     for sy in 0..clipboard.height {
         for sx in 0..clipboard.width {
             let Some((cx, cy)) = paste_dst_xy(sx, sy, &clipboard, &paste) else {
@@ -134,7 +121,7 @@ pub fn paste_with_mouse(params: PasteWithMouseParams) {
 
             let dst_x = pos.x + cx;
             let dst_y = pos.y + cy;
-            if dst_x >= tile_entities.width || dst_y >= tile_entities.height {
+            if dst_x >= map.width || dst_y >= map.height {
                 oob += 1;
                 continue;
             }
@@ -199,22 +186,12 @@ pub fn paste_with_mouse(params: PasteWithMouseParams) {
         let local = ch.idx.saturating_sub(layer_offset);
         let x = (local % map.width as usize) as u32;
         let y = (local / map.width as usize) as u32;
-        let entity_idx = tile_entities.idx_layer(layer, x, y);
-        if entity_idx >= tile_entities.entities.len() {
-            continue;
-        }
-        let entity = tile_entities.entities[entity_idx];
-        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
-            if let Some(TileRef { tileset_id, .. }) = &ch.after {
-                if runtime.by_id.get(tileset_id).is_none() {
-                    missing_atlas += 1;
-                }
-            }
-            apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
-            if !layer_visible {
-                *vis = Visibility::Hidden;
+        if let Some(TileRef { tileset_id, .. }) = &ch.after {
+            if render.runtime.by_id.get(tileset_id).is_none() {
+                missing_atlas += 1;
             }
         }
+        apply_tile_change(&mut render, &config, layer, x, y, &ch.before, &ch.after);
     }
 
     if missing_atlas > 0 {

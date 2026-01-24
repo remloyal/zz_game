@@ -3,11 +3,11 @@ use bevy::prelude::*;
 use std::collections::HashSet;
 
 use crate::editor::types::{
-    CellChange, ContextMenuAction, EditCommand, EditorConfig, SelectionRect, SelectionState, TileEntities,
-    TileMapData, TileRef, TilesetRuntime, UndoStack,
+    CellChange, ContextMenuAction, EditCommand, EditorConfig, SelectionRect, SelectionState,
+    TileMapData, TileRef, UndoStack,
 };
 
-use super::apply_tile_visual;
+use super::{apply_tile_change, TilemapRenderParams};
 
 fn mat_mul(a: [[i32; 2]; 2], b: [[i32; 2]; 2]) -> [[i32; 2]; 2] {
     [
@@ -83,10 +83,8 @@ pub(super) fn apply_selection_transform(
     selection: &mut SelectionState,
     map: &mut TileMapData,
     layer: u32,
-    tile_entities: &TileEntities,
-    runtime: &TilesetRuntime,
     config: &EditorConfig,
-    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    render: &mut TilemapRenderParams,
     undo: &mut UndoStack,
 ) -> bool {
     let Some(rect) = selection.rect else {
@@ -218,14 +216,7 @@ pub(super) fn apply_selection_transform(
         let local = ch.idx.saturating_sub(layer_offset);
         let x = (local % map.width as usize) as u32;
         let y = (local / map.width as usize) as u32;
-        let entity_idx = tile_entities.idx_layer(layer, x, y);
-        if entity_idx >= tile_entities.entities.len() {
-            continue;
-        }
-        let entity = tile_entities.entities[entity_idx];
-        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
-            apply_tile_visual(runtime, &ch.after, &mut sprite, &mut tf, &mut vis, config);
-        }
+        apply_tile_change(render, config, layer, x, y, &ch.before, &ch.after);
     }
     undo.push(cmd);
 

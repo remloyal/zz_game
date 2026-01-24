@@ -2,11 +2,10 @@ use bevy::prelude::*;
 
 use crate::editor::types::{
     CellChange, Clipboard, EditCommand, EditorConfig, LayerState, MapSizeFocus, MapSizeInput,
-    PasteState, SelectionRect, SelectionState, TileEntities, TileMapData, TileRef, TilesetRuntime,
-    ToolKind, ToolState, UndoStack,
+    PasteState, SelectionRect, SelectionState, TileMapData, TileRef, ToolKind, ToolState, UndoStack,
 };
 
-use super::context_menu;
+use super::{apply_tile_change, context_menu, TilemapRenderParams};
 
 /// Ctrl+C 复制选择区域到 Clipboard；Ctrl+V 进入粘贴模式；Esc 退出粘贴。
 pub fn copy_paste_shortcuts(
@@ -79,12 +78,10 @@ pub fn selection_cut_delete_shortcuts(
     input: Res<MapSizeInput>,
     tools: Res<ToolState>,
     layer_state: Res<LayerState>,
-    runtime: Res<TilesetRuntime>,
     config: Res<EditorConfig>,
     selection: Res<SelectionState>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    mut render: TilemapRenderParams,
     mut clipboard: ResMut<Clipboard>,
     mut undo: ResMut<UndoStack>,
 ) {
@@ -106,9 +103,6 @@ pub fn selection_cut_delete_shortcuts(
     }
 
     let Some(mut map) = map else {
-        return;
-    };
-    let Some(tile_entities) = tile_entities else {
         return;
     };
     let layer = layer_state.active.min(map.layers.saturating_sub(1));
@@ -155,14 +149,7 @@ pub fn selection_cut_delete_shortcuts(
         let local = ch.idx.saturating_sub(layer_offset);
         let x = (local % map.width as usize) as u32;
         let y = (local / map.width as usize) as u32;
-        let entity_idx = tile_entities.idx_layer(layer, x, y);
-        if entity_idx >= tile_entities.entities.len() {
-            continue;
-        }
-        let entity = tile_entities.entities[entity_idx];
-        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
-            super::apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
-        }
+        apply_tile_change(&mut render, &config, layer, x, y, &ch.before, &ch.after);
     }
 
     undo.push(cmd);
@@ -219,12 +206,10 @@ pub fn move_selection_shortcuts(
     input: Res<MapSizeInput>,
     tools: Res<ToolState>,
     layer_state: Res<LayerState>,
-    runtime: Res<TilesetRuntime>,
     config: Res<EditorConfig>,
     mut undo: ResMut<UndoStack>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    mut render: TilemapRenderParams,
     mut selection: ResMut<SelectionState>,
 ) {
     if input.focus != MapSizeFocus::None {
@@ -257,9 +242,6 @@ pub fn move_selection_shortcuts(
     }
 
     let Some(mut map) = map else {
-        return;
-    };
-    let Some(tile_entities) = tile_entities else {
         return;
     };
 
@@ -338,14 +320,7 @@ pub fn move_selection_shortcuts(
         let local = ch.idx.saturating_sub(layer_offset);
         let x = (local % map.width as usize) as u32;
         let y = (local / map.width as usize) as u32;
-        let entity_idx = tile_entities.idx_layer(layer, x, y);
-        if entity_idx >= tile_entities.entities.len() {
-            continue;
-        }
-        let entity = tile_entities.entities[entity_idx];
-        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
-            super::apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
-        }
+        apply_tile_change(&mut render, &config, layer, x, y, &ch.before, &ch.after);
     }
 
     undo.push(cmd);

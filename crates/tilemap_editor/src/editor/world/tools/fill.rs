@@ -4,12 +4,12 @@ use bevy::window::PrimaryWindow;
 use std::collections::VecDeque;
 
 use crate::editor::types::{
-    CellChange, ContextMenuState, EditCommand, EditorConfig, EditorState, LayerState, TileEntities,
-    TileMapData, TileRef, TilesetLibrary, TilesetRuntime, ToolKind, ToolState, UndoStack,
+    CellChange, ContextMenuState, EditCommand, EditorConfig, EditorState, LayerState, TileMapData,
+    TileRef, TilesetLibrary, ToolKind, ToolState, UndoStack,
     WorldCamera,
 };
 
-use super::super::{apply_tile_visual, cursor_tile_pos};
+use super::super::{apply_tile_change, cursor_tile_pos, TilemapRenderParams};
 
 /// 油漆桶（Flood Fill）：点击格子后，按 4 邻接填充“同类 tile”的连通区域。
 ///
@@ -26,10 +26,8 @@ pub fn fill_with_mouse(
     config: Res<EditorConfig>,
     state: Res<EditorState>,
     lib: Res<TilesetLibrary>,
-    runtime: Res<TilesetRuntime>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    mut render: TilemapRenderParams,
     mut undo: ResMut<UndoStack>,
 ) {
     if tools.tool != ToolKind::Fill {
@@ -52,9 +50,6 @@ pub fn fill_with_mouse(
     let Some(mut map) = map else {
         return;
     };
-    let Some(tile_entities) = tile_entities else {
-        return;
-    };
 
     let layer = layer_state.active.min(map.layers.saturating_sub(1));
     let layer_locked = map
@@ -62,11 +57,6 @@ pub fn fill_with_mouse(
         .get(layer as usize)
         .map(|d| d.locked)
         .unwrap_or(false);
-    let layer_visible = map
-        .layer_data
-        .get(layer as usize)
-        .map(|d| d.visible)
-        .unwrap_or(true);
     if layer_locked {
         return;
     }
@@ -88,8 +78,8 @@ pub fn fill_with_mouse(
         camera,
         camera_transform,
         &config,
-        tile_entities.width,
-        tile_entities.height,
+        map.width,
+        map.height,
     ) else {
         return;
     };
@@ -116,8 +106,8 @@ pub fn fill_with_mouse(
         return;
     }
 
-    let w = tile_entities.width;
-    let h = tile_entities.height;
+    let w = map.width;
+    let h = map.height;
     let mut visited = vec![false; (w * h) as usize];
     let mut q = VecDeque::new();
     let start_local = (pos.y * w + pos.x) as usize;
@@ -170,17 +160,7 @@ pub fn fill_with_mouse(
         let local = ch.idx.saturating_sub(layer_offset);
         let x = (local % map.width as usize) as u32;
         let y = (local / map.width as usize) as u32;
-        let entity_idx = tile_entities.idx_layer(layer, x, y);
-        if entity_idx >= tile_entities.entities.len() {
-            continue;
-        }
-        let entity = tile_entities.entities[entity_idx];
-        if let Ok((mut sprite, mut tf, mut vis)) = tiles_q.get_mut(entity) {
-            apply_tile_visual(&runtime, &ch.after, &mut sprite, &mut tf, &mut vis, &config);
-            if !layer_visible {
-                *vis = Visibility::Hidden;
-            }
-        }
+        apply_tile_change(&mut render, &config, layer, x, y, &ch.before, &ch.after);
     }
 
     undo.push(cmd);

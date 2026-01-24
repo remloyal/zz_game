@@ -2,22 +2,20 @@ use bevy::prelude::*;
 
 use crate::editor::types::{
     CellChange, EditCommand, EditorConfig, MapSizeFocus, MapSizeInput, ShiftMapMode,
-    ShiftMapSettings, TileEntities, TileMapData, TilesetRuntime, UndoStack,
+    ShiftMapSettings, TileMapData, UndoStack,
 };
 
-use super::apply_map_to_entities;
+use super::{apply_tile_change, TilemapRenderParams};
 
 /// Shift Map：Ctrl + 方向键整体平移一格（空出来的格子填 None），并可撤销。
 pub fn shift_map_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     input: Res<MapSizeInput>,
     settings: Res<ShiftMapSettings>,
-    runtime: Res<TilesetRuntime>,
     config: Res<EditorConfig>,
     mut undo: ResMut<UndoStack>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    mut render: TilemapRenderParams,
 ) {
     // 输入框聚焦时不抢快捷键
     if input.focus != MapSizeFocus::None {
@@ -46,10 +44,6 @@ pub fn shift_map_shortcuts(
     let Some(mut map) = map else {
         return;
     };
-    let Some(tile_entities) = tile_entities else {
-        return;
-    };
-
     let w = map.width;
     let h = map.height;
     if w == 0 || h == 0 {
@@ -99,6 +93,13 @@ pub fn shift_map_shortcuts(
     }
 
     map.tiles = new_tiles;
+    let layer_len = map.layer_len();
+    for ch in &cmd.changes {
+        let layer = (ch.idx / layer_len) as u32;
+        let local = ch.idx % layer_len;
+        let x = (local % map.width as usize) as u32;
+        let y = (local / map.width as usize) as u32;
+        apply_tile_change(&mut render, &config, layer, x, y, &ch.before, &ch.after);
+    }
     undo.push(cmd);
-    apply_map_to_entities(&runtime, &map, &tile_entities, &mut tiles_q, &config);
 }

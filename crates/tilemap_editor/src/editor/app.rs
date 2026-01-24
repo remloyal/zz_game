@@ -1,6 +1,7 @@
 //! 编辑器应用装配（Bevy App 构建与系统注册）。
 
 use bevy::prelude::*;
+use bevy_ecs_tilemap::prelude::TilemapPlugin;
 use bevy::ui::UiSystems;
 
 use super::{
@@ -39,6 +40,7 @@ pub fn run() {
 					..default()
 				}),
 		)
+		.add_plugins(TilemapPlugin)
 		// --- Resources ---
 		.init_resource::<EditorConfig>()
 		.init_resource::<EditorState>()

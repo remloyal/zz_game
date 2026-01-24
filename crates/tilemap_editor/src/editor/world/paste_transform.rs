@@ -3,13 +3,12 @@ use bevy::window::PrimaryWindow;
 
 use crate::editor::types::{
     Clipboard, ContextMenuAction, ContextMenuState, EditorConfig, LayerState, PasteState,
-    SelectionState, TileEntities, TileMapData, TilesetRuntime, ToolKind, ToolState, UndoStack,
-    WorldCamera,
+    SelectionState, TileMapData, ToolKind, ToolState, UndoStack, WorldCamera,
 };
 
 use super::{
     cursor_tile_pos, try_flip_map_tile_x, try_flip_map_tile_y, try_reset_map_tile_transform,
-    try_rotate_map_tile_ccw, try_rotate_map_tile_cw,
+    try_rotate_map_tile_ccw, try_rotate_map_tile_cw, TilemapRenderParams,
 };
 
 /// 粘贴变换：Q/E 旋转，H/V 翻转。
@@ -20,14 +19,12 @@ pub fn paste_transform_shortcuts(
     tools: Res<ToolState>,
     layer_state: Res<LayerState>,
     clipboard: Res<Clipboard>,
-    runtime: Res<TilesetRuntime>,
     config: Res<EditorConfig>,
     mut selection: ResMut<SelectionState>,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<Res<TileEntities>>,
-    mut tiles_q: Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
     mut undo: ResMut<UndoStack>,
     mut paste: ResMut<PasteState>,
+    mut render: TilemapRenderParams,
 ) {
     // 避免与 Ctrl+V（进入/重置粘贴）等快捷键冲突。
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
@@ -77,19 +74,15 @@ pub fn paste_transform_shortcuts(
     // 选择工具且存在选区：优先对“选区内容”做旋转/翻转/重置（更接近 RM 的使用习惯）。
     if tools.tool == ToolKind::Select {
         if selection.rect.is_some() {
-            if let (Some(mut map), Some(tile_entities)) =
-                (map_opt.take(), tile_entities.as_deref())
-            {
+            if let Some(mut map) = map_opt.take() {
                 let layer = layer_state.active.min(map.layers.saturating_sub(1));
                 let applied = super::selection_transform::apply_selection_transform(
                     action,
                     &mut selection,
                     &mut map,
                     layer,
-                    tile_entities,
-                    &runtime,
                     &config,
-                    &mut tiles_q,
+                    &mut render,
                     &mut undo,
                 );
                 map_opt = Some(map);
@@ -107,7 +100,7 @@ pub fn paste_transform_shortcuts(
         let Ok(window) = windows.single() else {
             return None;
         };
-        let Some(tile_entities) = tile_entities.as_deref() else {
+        let Some(tile_entities) = render.tile_entities.as_deref() else {
             return None;
         };
         let Ok((camera, camera_transform)) = camera_q.single() else {
@@ -125,42 +118,18 @@ pub fn paste_transform_shortcuts(
 
     if map_pos.is_some() {
         did_tile = match action {
-            ContextMenuAction::PasteRotateCcw => try_rotate_map_tile_ccw(
-                map_pos,
-                map_opt,
-                tile_entities.as_deref(),
-                &runtime,
-                &config,
-                &mut tiles_q,
-                &mut undo,
-            ),
-            ContextMenuAction::PasteRotateCw => try_rotate_map_tile_cw(
-                map_pos,
-                map_opt,
-                tile_entities.as_deref(),
-                &runtime,
-                &config,
-                &mut tiles_q,
-                &mut undo,
-            ),
-            ContextMenuAction::PasteFlipX => try_flip_map_tile_x(
-                map_pos,
-                map_opt,
-                tile_entities.as_deref(),
-                &runtime,
-                &config,
-                &mut tiles_q,
-                &mut undo,
-            ),
-            ContextMenuAction::PasteFlipY => try_flip_map_tile_y(
-                map_pos,
-                map_opt,
-                tile_entities.as_deref(),
-                &runtime,
-                &config,
-                &mut tiles_q,
-                &mut undo,
-            ),
+            ContextMenuAction::PasteRotateCcw => {
+                try_rotate_map_tile_ccw(map_pos, map_opt, &mut render, &config, &mut undo)
+            }
+            ContextMenuAction::PasteRotateCw => {
+                try_rotate_map_tile_cw(map_pos, map_opt, &mut render, &config, &mut undo)
+            }
+            ContextMenuAction::PasteFlipX => {
+                try_flip_map_tile_x(map_pos, map_opt, &mut render, &config, &mut undo)
+            }
+            ContextMenuAction::PasteFlipY => {
+                try_flip_map_tile_y(map_pos, map_opt, &mut render, &config, &mut undo)
+            }
             _ => false,
         };
     }
@@ -198,11 +167,9 @@ pub(super) fn apply_context_menu_paste_action(
     paste: &mut PasteState,
     clipboard: &Clipboard,
     menu: &ContextMenuState,
-    runtime: &TilesetRuntime,
     config: &EditorConfig,
     map: Option<ResMut<TileMapData>>,
-    tile_entities: Option<&TileEntities>,
-    tiles_q: &mut Query<(&mut Sprite, &mut Transform, &mut Visibility)>,
+    render: &mut TilemapRenderParams,
     undo: &mut UndoStack,
 ) {
     match action {
@@ -213,15 +180,7 @@ pub(super) fn apply_context_menu_paste_action(
                 info!("context cmd: rotate ccw (paste) -> rot={}", paste.rot % 4);
                 return;
             }
-            if try_rotate_map_tile_ccw(
-                menu.map_pos,
-                map,
-                tile_entities,
-                runtime,
-                config,
-                tiles_q,
-                undo,
-            ) {
+            if try_rotate_map_tile_ccw(menu.map_pos, map, render, config, undo) {
                 info!("context cmd: rotate ccw (tile)");
                 return;
             }
@@ -236,15 +195,7 @@ pub(super) fn apply_context_menu_paste_action(
                 info!("context cmd: rotate cw (paste) -> rot={}", paste.rot % 4);
                 return;
             }
-            if try_rotate_map_tile_cw(
-                menu.map_pos,
-                map,
-                tile_entities,
-                runtime,
-                config,
-                tiles_q,
-                undo,
-            ) {
+            if try_rotate_map_tile_cw(menu.map_pos, map, render, config, undo) {
                 info!("context cmd: rotate cw (tile)");
                 return;
             }
@@ -259,7 +210,7 @@ pub(super) fn apply_context_menu_paste_action(
                 info!("context cmd: flip x (paste) -> {}", paste.flip_x);
                 return;
             }
-            if try_flip_map_tile_x(menu.map_pos, map, tile_entities, runtime, config, tiles_q, undo) {
+            if try_flip_map_tile_x(menu.map_pos, map, render, config, undo) {
                 info!("context cmd: flip x (tile)");
                 return;
             }
@@ -274,7 +225,7 @@ pub(super) fn apply_context_menu_paste_action(
                 info!("context cmd: flip y (paste) -> {}", paste.flip_y);
                 return;
             }
-            if try_flip_map_tile_y(menu.map_pos, map, tile_entities, runtime, config, tiles_q, undo) {
+            if try_flip_map_tile_y(menu.map_pos, map, render, config, undo) {
                 info!("context cmd: flip y (tile)");
                 return;
             }
@@ -289,15 +240,7 @@ pub(super) fn apply_context_menu_paste_action(
                 info!("context cmd: paste reset");
                 return;
             }
-            if try_reset_map_tile_transform(
-                menu.map_pos,
-                map,
-                tile_entities,
-                runtime,
-                config,
-                tiles_q,
-                undo,
-            ) {
+            if try_reset_map_tile_transform(menu.map_pos, map, render, config, undo) {
                 info!("context cmd: tile transform reset");
                 return;
             }

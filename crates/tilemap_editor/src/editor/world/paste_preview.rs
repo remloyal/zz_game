@@ -6,8 +6,9 @@ use crate::editor::types::{
     TilesetRuntime, ToolKind, ToolState, WorldCamera,
 };
 use crate::editor::util::despawn_silently;
+use crate::editor::tileset::rect_for_tile_index;
 
-use super::{apply_tile_visual, cursor_tile_pos, tile_world_center};
+use super::{cursor_tile_pos, tile_world_center};
 use super::paste_helpers::{paste_dims, paste_dst_xy};
 
 /// 粘贴“幽灵预览”：在鼠标下方显示将要贴的图块（半透明），旋转/翻转会立即可见。
@@ -126,8 +127,43 @@ pub fn update_paste_preview(
             }
 
             tf.translation = tile_world_center(dst_x, dst_y, config.tile_size, 5.0);
-            apply_tile_visual(&runtime, &transformed[i], &mut sprite, &mut tf, &mut vis, &config);
+            apply_preview_tile_visual(&runtime, &transformed[i], &mut sprite, &mut tf, &mut vis, &config);
             sprite.color = Color::srgba(1.0, 1.0, 1.0, 0.55);
+        }
+    }
+}
+
+fn apply_preview_tile_visual(
+    runtime: &TilesetRuntime,
+    tile: &Option<TileRef>,
+    sprite: &mut Sprite,
+    tf: &mut Transform,
+    vis: &mut Visibility,
+    config: &EditorConfig,
+) {
+    match tile {
+        Some(TileRef { tileset_id, index, rot, flip_x, flip_y }) => {
+            let Some(atlas) = runtime.by_id.get(tileset_id) else {
+                sprite.rect = None;
+                sprite.flip_x = false;
+                sprite.flip_y = false;
+                tf.rotation = Quat::IDENTITY;
+                *vis = Visibility::Hidden;
+                return;
+            };
+            sprite.image = atlas.texture.clone();
+            sprite.rect = Some(rect_for_tile_index(*index, atlas.columns, config.tile_size));
+            sprite.flip_x = *flip_x;
+            sprite.flip_y = *flip_y;
+            let r = (*rot % 4) as f32;
+            tf.rotation = Quat::from_rotation_z(-r * std::f32::consts::FRAC_PI_2);
+            *vis = Visibility::Visible;
+        }
+        None => {
+            sprite.flip_x = false;
+            sprite.flip_y = false;
+            tf.rotation = Quat::IDENTITY;
+            *vis = Visibility::Hidden;
         }
     }
 }

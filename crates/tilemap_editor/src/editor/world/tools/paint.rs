@@ -5,12 +5,12 @@ use bevy::ecs::system::SystemParam;
 use std::collections::HashMap;
 
 use crate::editor::types::{
-    CellChange, ContextMenuState, EditCommand, EditorConfig, EditorState, LayerState, TileEntities,
-    TileMapData, TileRef, TilesetLibrary, TilesetRuntime, ToolKind, ToolState, UndoStack,
-    BrushSettings, WorldCamera,
+    CellChange, ContextMenuState, EditCommand, EditorConfig, EditorState, LayerState, TileMapData,
+    TileRef, TilesetLibrary, ToolKind, ToolState, UndoStack,
+    BrushSettings, WorldCamera, 
 };
 
-use super::super::{apply_tile_visual, cursor_tile_pos};
+use super::super::{apply_tile_change, cursor_tile_pos, TilemapRenderParams};
 
 #[derive(SystemParam)]
 pub struct PaintWithMouseParams<'w, 's> {
@@ -25,11 +25,8 @@ pub struct PaintWithMouseParams<'w, 's> {
     pub config: Res<'w, EditorConfig>,
     pub state: Res<'w, EditorState>,
     pub lib: Res<'w, TilesetLibrary>,
-    pub runtime: Res<'w, TilesetRuntime>,
     pub map: Option<ResMut<'w, TileMapData>>,
-    pub tile_entities: Option<Res<'w, TileEntities>>,
-    pub tiles_q:
-        Query<'w, 's, (&'static mut Sprite, &'static mut Transform, &'static mut Visibility)>,
+    pub render: TilemapRenderParams<'w, 's>,
     pub undo: ResMut<'w, UndoStack>,
 }
 
@@ -66,9 +63,6 @@ pub fn paint_with_mouse(
     let Some(mut map) = p.map else {
         return;
     };
-    let Some(tile_entities) = p.tile_entities else {
-        return;
-    };
 
     let layer = p.layer_state.active.min(map.layers.saturating_sub(1));
     let layer_locked = map
@@ -76,11 +70,6 @@ pub fn paint_with_mouse(
         .get(layer as usize)
         .map(|d| d.locked)
         .unwrap_or(false);
-    let layer_visible = map
-        .layer_data
-        .get(layer as usize)
-        .map(|d| d.visible)
-        .unwrap_or(true);
     if layer_locked {
         // 若当前正在 stroke 中，直接终止（不提交）。
         stroke.active = false;
@@ -114,8 +103,8 @@ pub fn paint_with_mouse(
         camera,
         camera_transform,
         &p.config,
-        tile_entities.width,
-        tile_entities.height,
+        map.width,
+        map.height,
     );
 
     // 开始一次 stroke：必须在画布区域内按下
@@ -157,27 +146,17 @@ pub fn paint_with_mouse(
                 continue;
             }
             let idx = map.idx_layer(layer, x, y);
-            let entity_idx = tile_entities.idx_layer(layer, x, y);
-            if idx >= map.tiles.len() || entity_idx >= tile_entities.entities.len() {
+            if idx >= map.tiles.len() {
                 continue;
             }
-            let entity = tile_entities.entities[entity_idx];
-
             if map.tiles[idx] == desired {
                 continue;
             }
-
             let before = map.tiles[idx].clone();
             map.tiles[idx] = desired.clone();
             stroke.record_change(idx, before.clone(), desired.clone());
 
-            // 局部刷新渲染（单格），避免每帧全量 apply
-            if let Ok((mut sprite, mut tf, mut vis)) = p.tiles_q.get_mut(entity) {
-                apply_tile_visual(&p.runtime, &desired, &mut sprite, &mut tf, &mut vis, &p.config);
-                if !layer_visible {
-                    *vis = Visibility::Hidden;
-                }
-            }
+            apply_tile_change(&mut p.render, &p.config, layer, x, y, &before, &desired);
         }
     }
 }
