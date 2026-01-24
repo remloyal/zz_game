@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 
 use super::super::types::EditorConfig;
-use super::super::types::TileEntities;
+use super::super::types::{TileEntities, DEFAULT_CHUNK_SIZE};
 
 /// 初始化地图渲染容器（bevy_ecs_tilemap 后端）。
 ///
@@ -21,6 +21,7 @@ pub fn spawn_map_entities_with_layers(
 		width,
 		height,
 		layers,
+		chunk_size: DEFAULT_CHUNK_SIZE,
 		tilemaps: Default::default(),
 		tileset_order: Default::default(),
 	}

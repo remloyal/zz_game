@@ -9,9 +9,9 @@ use super::{
 	tileset,
 	types::{
 		BrushSettings, Clipboard, ContextMenuCommand, ContextMenuState, EditorConfig, EditorState,
-		LayerState, MapSizeInput, MenuState, PanState, PastePreview, PasteState, SelectionState, ShiftMapSettings,
-		TilesetLibrary, TilesetLoading, TilesetRuntime, ToolState, UiState, UndoStack, PaletteSearchInput,
-		LayerNameInput,
+			LayerState, MapSizeInput, MenuState, PanState, PastePreview, PasteState, SelectionState, ShiftMapSettings,
+			TilesetLibrary, TilesetLoading, TilesetRuntime, ToolState, UiState, UndoStack,
+			PaletteSearchInput, LayerNameInput,
 	},
 	ui,
 	world,
@@ -199,10 +199,12 @@ pub fn run() {
 				// --- World: camera ---
 				world::refresh_map_on_tileset_runtime_change,
 				world::sync_layer_visibility_on_layer_data_change,
+				world::update_visible_chunks,
 				world::recenter_camera_on_map_change,
 				world::camera_zoom,
 				world::camera_pan,
-			),
+			)
+				.chain(),
 		)
 		// --- World: mouse tools + HUD ---
 		.add_systems(Update, world::draw_canvas_helpers)

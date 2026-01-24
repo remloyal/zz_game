@@ -18,7 +18,7 @@ mod tools;
 mod undo;
 mod ui;
 
-pub use tilemap::{LayerState, TileEntities};
+pub use tilemap::{LayerState, TileEntities, DEFAULT_CHUNK_SIZE};
 
 pub use tilemap_core::{TileMapData, TileRef, TilesetId, DEFAULT_LAYER_COUNT};
 

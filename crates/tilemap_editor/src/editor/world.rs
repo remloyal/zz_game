@@ -53,7 +53,7 @@ pub use context_menu::{apply_context_menu_command, context_menu_clear_consumptio
 pub use paste_apply::paste_with_mouse;
 pub use paste_preview::update_paste_preview;
 pub use paste_transform::paste_transform_shortcuts;
-pub use render_sync::{refresh_map_on_tileset_runtime_change, rebuild_tilemaps, sync_layer_visibility_on_layer_data_change};
+pub use render_sync::{refresh_map_on_tileset_runtime_change, rebuild_tilemaps, sync_layer_visibility_on_layer_data_change, update_visible_chunks};
 pub use selection_move::selection_move_with_mouse;
 pub use tools::{fill_with_mouse, paint_with_mouse, rect_with_mouse};
 
@@ -118,28 +118,29 @@ pub(crate) fn apply_tile_change(
     }
 }
 
-fn ensure_tilemap_layer(
+fn ensure_tilemap_chunk(
     commands: &mut Commands,
     tile_entities: &mut TileEntities,
     runtime: &TilesetRuntime,
     config: &EditorConfig,
     tileset_id: &str,
     layer: u32,
+    cx: u32,
+    cy: u32,
 ) -> Option<Entity> {
     let tileset_id = tileset_id.to_string();
-    if let Some(entity) = tile_entities.layer_entity(&tileset_id, layer) {
-        if entity != Entity::PLACEHOLDER {
-            return Some(entity);
-        }
+    if let Some(entity) = tile_entities.chunk_entity(&tileset_id, layer, cx, cy) {
+        return Some(entity);
     }
 
     let Some(rt) = runtime.by_id.get(&tileset_id) else {
         return None;
     };
 
+    let chunk_size = tile_entities.chunk_size.max(1);
     let map_size = TilemapSize {
-        x: tile_entities.width,
-        y: tile_entities.height,
+        x: chunk_size,
+        y: chunk_size,
     };
     let tile_size = TilemapTileSize {
         x: config.tile_size.x as f32,
@@ -152,7 +153,9 @@ fn ensure_tilemap_layer(
     let storage = TileStorage::empty(map_size);
     let order = tile_entities.tileset_index(&tileset_id);
     let z = layer as f32 * 10.0 + order as f32 * 0.01;
-    let offset = Vec3::new(tile_size.x * 0.5, tile_size.y * 0.5, z);
+    let origin_x = cx as f32 * chunk_size as f32 * tile_size.x;
+    let origin_y = cy as f32 * chunk_size as f32 * tile_size.y;
+    let offset = Vec3::new(origin_x + tile_size.x * 0.5, origin_y + tile_size.y * 0.5, z);
 
     let map_entity = commands.spawn_empty().id();
     commands.entity(map_entity).insert(TilemapBundle {
@@ -165,7 +168,7 @@ fn ensure_tilemap_layer(
         ..Default::default()
     });
 
-    tile_entities.set_layer_entity(tileset_id, layer, map_entity);
+    tile_entities.set_chunk_entity(tileset_id, layer, cx, cy, map_entity);
     Some(map_entity)
 }
 
@@ -179,13 +182,18 @@ fn remove_tile_from_tileset(
     y: u32,
 ) {
     let tileset_id = tileset_id.to_string();
-    let Some(map_entity) = tile_entities.layer_entity(&tileset_id, layer) else {
+    let chunk_size = tile_entities.chunk_size.max(1);
+    let cx = x / chunk_size;
+    let cy = y / chunk_size;
+    let lx = x % chunk_size;
+    let ly = y % chunk_size;
+    let Some(map_entity) = tile_entities.chunk_entity(&tileset_id, layer, cx, cy) else {
         return;
     };
     let Ok(mut storage) = tile_storage_q.get_mut(map_entity) else {
         return;
     };
-    let pos = TilePos { x, y };
+    let pos = TilePos { x: lx, y: ly };
     if let Some(tile_entity) = storage.get(&pos) {
         despawn_silently(commands, tile_entity);
         storage.remove(&pos);
@@ -204,13 +212,20 @@ fn set_tile_in_tileset(
     y: u32,
     tile: &TileRef,
 ) {
-    let Some(map_entity) = ensure_tilemap_layer(
+    let chunk_size = tile_entities.chunk_size.max(1);
+    let cx = x / chunk_size;
+    let cy = y / chunk_size;
+    let lx = x % chunk_size;
+    let ly = y % chunk_size;
+    let Some(map_entity) = ensure_tilemap_chunk(
         commands,
         tile_entities,
         runtime,
         config,
         tileset_id,
         layer,
+        cx,
+        cy,
     ) else {
         return;
     };
@@ -218,7 +233,7 @@ fn set_tile_in_tileset(
     let Ok(mut storage) = tile_storage_q.get_mut(map_entity) else {
         return;
     };
-    let pos = TilePos { x, y };
+    let pos = TilePos { x: lx, y: ly };
     if let Some(tile_entity) = storage.get(&pos) {
         commands.entity(tile_entity).insert(TileTextureIndex(tile.index));
         commands.entity(tile_entity).insert(tile_flip_from_ref(tile));
